@@ -5,14 +5,20 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from shapely import Point
+from shapely import Point, box
 from shapely.ops import unary_union
 
 from appParsers.ParseProteus import ProteusParser, ProteusParseError
+from camlib import circle_quad_segs, gerber_circle_steps
 
 
 PROJECT = Path(__file__).parent / 'fixtures' / 'Proteus' / 'TP1_G1.pdsprj'
 PROJECT9 = Path(__file__).parent / 'fixtures' / 'Proteus9' / 'pcb 1.pdsprj'
+
+
+def unit_disc():
+    # The parser follows the Gerber circle preference (adaptive by default) for a 1 mm radius.
+    return Point(0, 0).buffer(1, quad_segs=circle_quad_segs(gerber_circle_steps(None, 1)))
 
 
 @pytest.fixture(scope='module')
@@ -21,8 +27,11 @@ def parsed():
 
 
 def rewrite_project(path, change):
+    # Keep only BOARD4: a full four-board parse takes seconds and these tests change one board.
     with zipfile.ZipFile(PROJECT) as source, zipfile.ZipFile(path, 'w') as target:
         for item in source.infolist():
+            if item.filename.endswith('.LYT') and item.filename != 'BOARD4.LYT':
+                continue
             target.writestr(item.filename, change(item.filename, source.read(item)))
     return path
 
@@ -147,7 +156,7 @@ def test_unknown_framed_graphic_is_warned_without_losing_native_drills(tmp_path)
         header = struct.pack('<IBBI', 56, 1, 2, 32)
         return data.replace(header, struct.pack('<IBBI', 56, 99, 2, 32), 1)
     result = ProteusParser().parse_file(rewrite_project(tmp_path / 'unknown.pdsprj', change))
-    board = result.boards[3]
+    board = result.boards[0]
     assert any('graphic kind 99' in warning for warning in board.warnings)
     assert sum(len(tool['drills']) for tool in board.drill_groups['PTH'].values()) == 124
 
@@ -159,14 +168,15 @@ def test_unknown_pad_span_is_not_labelled_manufacturing_ready(tmp_path):
         pad = struct.pack('<QHBii', 0x800000000000ffff, 22, 3, 7396000, 4844000)
         replacement = struct.pack('<QHBii', 0x1000000000000000, 22, 3, 7396000, 4844000)
         return data.replace(pad, replacement, 1)
-    board = ProteusParser().parse_file(rewrite_project(tmp_path / 'span.pdsprj', change)).boards[3]
+    board = ProteusParser().parse_file(rewrite_project(tmp_path / 'span.pdsprj', change)).boards[0]
     previews = [name for name in board.layers if 'Pad span' in name]
     assert previews and not set(previews).intersection(board.default_layers)
-    assert any('unverified' in name.lower() for name in board.drill_groups)
+    assert not any('unverified' in name.lower() for name in board.drill_groups)
+    assert sum(len(tool['drills']) for tools in board.drill_groups.values() for tool in tools.values()) == 128
     assert any('span 0x1000000000000000' in warning for warning in board.warnings)
 
 
-def island_project(path, extra_stack=(), graphics=()):
+def island_project(path, extra_stack=(), graphics=(), region_layer=0, net='GND'):
     def number(value):
         return struct.pack('<I', value)
 
@@ -192,8 +202,8 @@ def island_project(path, extra_stack=(), graphics=()):
     board += number(0) + bytes(4)  # no spans, graphic styles or text styles
     board += b';PS\nPAD,CPAD,1mm,1mm,0,0,0,0,0,0\n*\n;TS\nDEFAULT,10th\nRELIEF,10th\n*\n'
     board += bytes(8) + b'\xfe\xff\0\xfe\xff\0' + bytes(7)
-    board += b'\0\1\0' + number(len(editable) + 4) + editable
-    board += text('GND') + text('DEFAULT') + text('RELIEF') + bytes(26) + number(2)
+    board += b'\0\1' + bytes([region_layer]) + number(len(editable) + 4) + editable
+    board += text(net) + text('DEFAULT') + text('RELIEF') + bytes(26) + number(2)
     board += ring(outer) + number(1) + ring(hole) + ring(island) + number(0)
     board += bytes(16)
     for layer in graphics:
@@ -218,6 +228,14 @@ def test_saved_pour_island_inside_a_hole_is_not_flooded_or_erased(tmp_path):
     assert copper.covers(Point(5, 5))
 
 
+def test_unassigned_region_on_a_resist_layer_stays_on_that_layer(tmp_path):
+    path = island_project(tmp_path / 'resist.pdsprj', extra_stack=((0, 38, 'Top Resist'),),
+                          region_layer=38, net='')
+    board = ProteusParser().parse_file(path).boards[0]
+    assert not any('Unassigned' in name for name in board.layers)
+    assert unary_union(board.layers['Top Resist.GTS']['solid_geometry']).area == pytest.approx(68)
+
+
 def test_identified_manufacturing_layers_are_default_but_unknown_graphics_are_not(tmp_path):
     # Native IDs/stack kinds carry identity; editable display labels do not.
     stack = ((0, 38, 'Front coating'), (1, 7, 'Internal signal'), (0, 39, 'Rear coating'))
@@ -231,10 +249,10 @@ def test_identified_manufacturing_layers_are_default_but_unknown_graphics_are_no
                 'Top Silk Screen.GTO', 'Bottom Silk Screen.GBO', 'Top SMT Paste.GTP', 'Bottom SMT Paste.GBP'}
     assert expected <= set(board.default_layers)
     for name in expected:
-        assert board.layers[name]['solid_geometry'][0].area == pytest.approx(Point(0, 0).buffer(1, quad_segs=32).area)
+        assert board.layers[name]['solid_geometry'][0].area == pytest.approx(unit_disc().area)
         assert board.layers[name]['name'] == name.rsplit('.', 1)[0]
-    assert 'Layer 25 (unverified)' in board.layers
-    assert 'Layer 25 (unverified)' not in board.default_layers
+    assert 'Mechanical 1.GM1' in board.layers
+    assert 'Mechanical 1.GM1' not in board.default_layers
 
 
 @pytest.mark.parametrize('span,kind,mask_extensions,paste_extension', [
@@ -256,7 +274,8 @@ def test_ordinary_native_pad_openings_follow_actual_side_and_radial_guard(span, 
              for name, layer in board.layers.items() if name.endswith(('.GTS', '.GBS'))}
     assert masks.keys() == mask_extensions
     for mask in masks.values():
-        assert mask.bounds == pytest.approx((8.873, 19.373, 11.127, 20.627))
+        # Adaptive circles keep every chord within the 2 um "gerber_circle_tolerance".
+        assert mask.bounds == pytest.approx((8.873, 19.373, 11.127, 20.627), abs=0.002)
         assert mask.covers(Point(11.1, 20))
         if kind == 'RSMPAD':
             assert not mask.covers(Point(11.12, 20.62))  # rounded expansion, not a larger sharp box
@@ -266,31 +285,18 @@ def test_ordinary_native_pad_openings_follow_actual_side_and_radial_guard(span, 
         assert pastes[0].endswith('.' + paste_extension)
         paste = unary_union(board.layers[pastes[0]]['solid_geometry'])
         assert paste.bounds == pytest.approx((9, 19.5, 11, 20.5))
-        expected_area = 2 if kind == 'RSMPAD' else Point(0, 0).buffer(1, quad_segs=32).area / 2
+        expected_area = 2 if kind == 'RSMPAD' else unit_disc().area / 2
         assert paste.area == pytest.approx(expected_area)
 
 
-def test_custom_polygon_pad_is_not_guessed_as_paste():
-    from appParsers.ParseProteus8 import Proteus8Parser, _Reader
-
-    board = Proteus8Parser()
-    board._copper = [0, 15]
-    board._remember_layer(0, 'Top Copper')
-    board._remember_layer(15, 'Bottom Copper')
-    board._pad_styles = [(['ANTENNA', 'PSMPAD', '4', '0', '0', '0', '4', '0', '0'],
-                          ['0,0', '1,0', '1,1', '0,1'])]
-    data = struct.pack('<QHBiihH', 0, 0, 0, 0, 0, 0, 0) + bytes(15)
-    board._pad(_Reader(data, 'pad.LYT'))
-    board._finish()
-    assert sum(poly.area for layer in board.layers.values() for poly in layer['solid_geometry']) == pytest.approx(1)
-    assert not any(name.endswith(('.GTP', '.GBP', '.GTS', '.GBS')) for name in board.layers)
-
-
-def test_native_wireless_openings_do_not_include_outline_or_custom_antenna(parsed):
+def test_wireless_openings_mask_custom_antenna_without_paste_or_outline(parsed):
     board = parsed.boards[3]
     mask = unary_union(board.layers['Top Resist.GTS']['solid_geometry'])
     bottom = unary_union(board.layers['Bottom Resist.GBS']['solid_geometry'])
     paste = unary_union(board.layers['Top SMT Paste.GTP']['solid_geometry'])
+    antenna = box(74.2, 5.8, 99.2, 43.8)
+    assert mask.intersection(antenna).area > 290
+    assert paste.intersection(antenna).area <= 1.0 + 1e-6
     assert mask.covers(Point(58.3, 12.5))
     assert not paste.covers(Point(58.3, 12.5))
     assert mask.covers(Point(71.42 + 1, 48.44))
@@ -300,6 +306,14 @@ def test_native_wireless_openings_do_not_include_outline_or_custom_antenna(parse
     assert not mask.covers(Point(0, 0.27))
     assert not bottom.covers(Point(0, 0.27))
     assert unary_union(board.layers['Board Outline.GKO']['solid_geometry']).covers(Point(0, 0.27))
+
+
+def test_stacked_pad_mask_comes_from_its_stack_entries(parsed):
+    board = parsed.boards[1]
+    for name in ('Top Resist.GTS', 'Bottom Resist.GBS'):
+        opening = unary_union(board.layers[name]['solid_geometry'])
+        assert opening.covers(Point(8.40, 16.20))
+        assert opening.covers(Point(8.40 + 0.7, 16.20))  # 1.5 mm stacked pad, not a point
 
 
 def test_duplicate_native_layer_names_do_not_merge_copper_identities(tmp_path):
@@ -312,6 +326,35 @@ def test_duplicate_native_layer_names_do_not_merge_copper_identities(tmp_path):
     assert board.layers['Top Copper.GTL']['solid_geometry'][0].area == pytest.approx(64)
 
 
+def test_unverified_layer_artwork_does_not_join_a_named_native_layer(tmp_path):
+    path = island_project(tmp_path / 'preview.pdsprj',
+                          extra_stack=((1, 7, 'Layer 25 (unverified)'),), graphics=(25,))
+    board = ProteusParser().parse_file(path).boards[0]
+    assert board.default_layers == ['Top Copper.GTL']
+    assert 'Layer 25 (unverified).G1' not in board.layers
+    assert [name for name in board.layers if name.startswith('Mechanical')] == ['Mechanical 1.GM1']
+    assert 'Mechanical 1.GM1' not in board.default_layers
+    assert board.layers['Mechanical 1.GM1']['solid_geometry'][0].area == pytest.approx(
+        unit_disc().area)
+
+
+def test_unidentified_native_layers_are_numbered_as_mechanical(parsed):
+    board = parsed.boards[3]
+    assert not any('Layer 25' in name or 'Layer 26' in name for name in board.layers)
+    assert {'Mechanical 1.GM1', 'Mechanical 2.GM2'} <= board.layers.keys()
+    assert board.layers['Mechanical 1.GM1']['name'] == 'Mechanical 1'
+    assert unary_union(board.layers['Mechanical 1.GM1']['solid_geometry']).area == pytest.approx(21.69, abs=0.05)
+    assert unary_union(board.layers['Mechanical 2.GM2']['solid_geometry']).area == pytest.approx(91.75, abs=0.05)
+    assert not {'Mechanical 1.GM1', 'Mechanical 2.GM2'} & set(board.default_layers)
+
+
+def test_bitmap_logo_draws_its_letters_not_a_box(parsed):
+    logo = box(6.2257, 0.27, 15.4, 10.0793)
+    silk = unary_union(parsed.boards[3].layers['Top Silk Screen.GTO']['solid_geometry'])
+    inked = silk.intersection(logo).area
+    assert 5 < inked < 0.5 * logo.area  # white letters on a black 1-bit logo
+
+
 def test_actual_version_nine_project_uses_its_native_schema():
     result = ProteusParser().parse_file(PROJECT9)
     assert result.major_version == result.detected_major_version == 9
@@ -322,9 +365,10 @@ def test_actual_version_nine_project_uses_its_native_schema():
     assert {'Top Copper.GTL', 'Bottom Copper.GBL'} <= board.layers.keys()
     assert sum(len(tool['drills']) for group in board.drill_groups.values() for tool in group.values()) == 27
     assert {round(tool['tooldia'], 6): len(tool['drills']) for tool in board.drill_groups['PTH'].values()} == {
-        0.762: 6, 1.016: 17}
-    assert sum(len(tool['drills']) for name, group in board.drill_groups.items()
-               if 'Unverified' in name for tool in group.values()) == 4
+        0.762: 6, 1.016: 17, 3.0: 4}
+    assert not any('Unverified' in name for name in board.drill_groups)
+    assert set(board.default_drill_groups) == {'PTH'}
+    assert not any('unverified' in group.lower() for group in board.default_drill_groups)
     assert sum(len(board.layers[name]['follow_geometry'])
                for name in ('Top Copper.GTL', 'Bottom Copper.GBL')) == 20
     assert any('907' in warning for warning in result.warnings)
@@ -392,7 +436,7 @@ def test_version_nine_fallback_is_explicit(tmp_path):
                            if name == 'PROJECT.XML' else data)
     result = ProteusParser().parse_file(path)
     assert result.major_version == 9
-    assert len(result.boards) == 4
+    assert [board.name for board in result.boards] == ['PCB3-Wireless']
     assert any('9' in text and '8' in text and 'fallback' in text.lower() for text in result.warnings)
 
 
@@ -410,8 +454,8 @@ def test_variable_length_technology_and_bitmap_do_not_shift_decoding(tmp_path):
         data = data[:start - 4] + struct.pack('<I', len(dib)) + dib + data[start + size:]
         return data
     result = ProteusParser().parse_file(rewrite_project(tmp_path / 'shifted.pdsprj', change))
-    assert result.boards[3].name == 'PCB3-Wireless'
-    assert sum(len(tool['drills']) for tool in result.boards[3].drill_groups['PTH'].values()) == 124
+    assert result.boards[0].name == 'PCB3-Wireless'
+    assert sum(len(tool['drills']) for tool in result.boards[0].drill_groups['PTH'].values()) == 124
 
 
 @pytest.mark.parametrize('damage', ['truncated', 'bad_signature', 'bad_extent'])
@@ -429,7 +473,7 @@ def test_damaged_board_fails_atomically(tmp_path, damage):
         return data[:offset] + struct.pack('<I', 0xffffffff) + data[offset + 4:]
     parser = ProteusParser()
     if damage == 'truncated':
-        parser.parse_file(PROJECT)
+        parser.parse_file(PROJECT9)
     with pytest.raises(ProteusParseError, match='BOARD4.LYT'):
         parser.parse_file(rewrite_project(tmp_path / 'bad.pdsprj', change))
     assert parser.boards == []
@@ -445,6 +489,24 @@ def test_invalid_archive_and_unsupported_version_fail(tmp_path):
                            if name == 'PROJECT.XML' else data)
     with pytest.raises(ProteusParseError, match='version'):
         ProteusParser().parse_file(path)
+
+
+def test_firmware_source_is_embedded_or_beside_the_project_only(tmp_path):
+    (tmp_path / 'Firmware').mkdir()
+    (tmp_path / 'Firmware' / 'util.c').write_bytes(b'int util(void);\n')
+    (tmp_path.parent / 'secret.c').write_bytes(b'outside\n')
+    path = tmp_path / 'firmware.pdsprj'
+    with zipfile.ZipFile(PROJECT9) as source, zipfile.ZipFile(path, 'w') as target:
+        for item in source.infolist():
+            target.writestr(item.filename, source.read(item))
+        target.writestr('U1/main.c', '#include <avr/io.h>\nint main(void) { return 0; }\n')
+        target.writestr('U1/main.hex', ':00000001FF\n')
+        target.writestr('FIRMWARE.XML', '<FIRMWARE><PROJECTS><PROJECT><FILE NAME="Firmware/util.c"/>'
+                                        '<FILE NAME="../secret.c"/></PROJECT></PROJECTS></FIRMWARE>')
+    result = ProteusParser().parse_file(path)
+    assert result.firmware == [('U1/main.c', '#include <avr/io.h>\nint main(void) { return 0; }\n'),
+                               ('Firmware/util.c', 'int util(void);\n')]
+    assert any('secret.c' in warning for warning in result.warnings)
 
 
 @pytest.mark.parametrize('project', [PROJECT, PROJECT9], ids=['proteus8', 'proteus9'])

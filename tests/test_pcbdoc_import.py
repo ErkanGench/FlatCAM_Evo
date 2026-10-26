@@ -123,7 +123,35 @@ class TestPcbDocImport(unittest.TestCase):
     def test_proteus_cancel_keeps_existing_projects_and_creates_no_board_project(self):
         self._import_proteus_projects(stop='cancel')
 
-    def _import_proteus_projects(self, stop=None):
+    def test_proteus_invalid_board_title_falls_back_before_creating_a_project(self):
+        self._import_proteus_projects(names=('Power: 5V', 'Power'),
+                                      members=('BOARD1.LYT', 'BOARD2.LYT'),
+                                      expected=('BOARD1', 'Power'))
+
+    def test_proteus_dialog_checks_only_verified_drill_groups_by_default(self):
+        self.app.ui = QtWidgets.QWidget()
+        self.parsed.name = 'Power Board'
+        self.parsed.default_drill_groups = ['PTH']
+        self.parsed.drill_groups['Unverified span 0x3d'] = {
+            1: dict(tooldia=0.3, drills=[Point(0, 0)], slots=[])}
+        states = {}
+
+        def choose(dialog):
+            states.update({box.text(): box.isChecked() for box in dialog.findChildren(QtWidgets.QCheckBox)})
+            return QtWidgets.QDialog.DialogCode.Accepted
+
+        with patch.object(QtWidgets.QDialog, 'exec', choose):
+            selection = self.io.on_pcbdoc_parsed('design.pdsprj', self.parsed)
+        self.assertFalse(states['Unverified span 0x3d'])
+        self.assertTrue(states['PTH'])
+        self.assertEqual(selection[1], ['PTH'])
+
+        del self.parsed.default_drill_groups
+        with patch.object(QtWidgets.QDialog, 'exec', choose):
+            self.io.on_pcbdoc_parsed('design.pdsprj', self.parsed)
+        self.assertTrue(states['Unverified span 0x3d'])
+
+    def _import_proteus_projects(self, stop=None, names=('Main', 'Power'), members=None, expected=None):
         from test_projects_manager import make_manager, FakeCollection
         from PyQt6.QtGui import QStandardItemModel
 
@@ -182,8 +210,9 @@ class TestPcbDocImport(unittest.TestCase):
         io = appIO(app)
         io.export_gerber = self.io.export_gerber
         io.export_excellon = self.io.export_excellon
-        boards = [SimpleNamespace(**dict(vars(self.parsed), name=name, member_name=name + '.LYT'))
-                  for name in ('Main', 'Power')]
+        boards = [SimpleNamespace(**dict(vars(self.parsed), name=name, member_name=member))
+                  for name, member in zip(names, members or tuple(name + '.LYT' for name in names))]
+        expected = expected or names
         parsed = SimpleNamespace(boards=boards, warnings=['Proteus 9 native decoder', 'Incomplete fidelity'] * 2,
                                  major_version=9)
         warnings = []
@@ -206,7 +235,7 @@ class TestPcbDocImport(unittest.TestCase):
                     break
                 self.assertEqual(len(projects.contexts), index + 2)
                 context = projects.active
-                self.assertEqual(context.name, boards[index].name)
+                self.assertEqual(context.name, expected[index])
                 job = worker_jobs.pop(0)
                 thread = threading.Thread(target=job['fcn'], args=job['params'])
                 thread.start()
@@ -237,9 +266,10 @@ class TestPcbDocImport(unittest.TestCase):
             io._advance_proteus_import()
         self.assertEqual(original.collection.objects, ['existing'])
         self.assertEqual([ctx.name for ctx in projects.contexts[1:]],
-                         [] if stop == 'cancel' else ['Main'] if stop else ['Main', 'Power'])
+                         [] if stop == 'cancel' else list(expected[:1]) if stop else list(expected))
         self.assertTrue(all(ctx.filename is None for ctx in projects.contexts[1:]))
-        self.assertTrue(all(obj.obj_options['name'].startswith(ctx.name) for ctx in projects.contexts[1:]
+        self.assertTrue(all(obj.obj_options['name'].startswith(board.name)
+                            for board, ctx in zip(boards, projects.contexts[1:])
                             for obj in ctx.collection.objects))
         if stop:
             app.file_opened.emit.assert_not_called()

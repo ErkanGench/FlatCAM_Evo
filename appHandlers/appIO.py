@@ -25,6 +25,7 @@ from svglib.svglib import svg2rlg
 from xml.dom.minidom import parseString as parse_xml_string
 from lxml import etree as ET
 
+import html
 import time
 import sys
 import os
@@ -246,13 +247,17 @@ class appIO(QtCore.QObject):
             if not (layers or drills):
                 state['failed'] = True
                 return
+            from appObjects.ProjectContext import unique_name, is_valid_name
+            fallback = os.path.splitext(os.path.basename(board.member_name))[0]
+            fallback = fallback.replace('\\', '_').replace('/', '_').strip()
+            name = (board.name or fallback).strip()
+            if not is_valid_name(name):
+                name = fallback if is_valid_name(fallback) else 'Proteus board'
             ctx = self.app.projects.new()
             if ctx is None:
                 state['failed'] = True
                 return
-            name = board.name or os.path.splitext(os.path.basename(board.member_name))[0]
             # Use the manager's native unique-name policy for repeated board titles.
-            from appObjects.ProjectContext import unique_name
             if not self.app.projects.rename(ctx, unique_name(name, self.app.projects.names())):
                 raise ValueError(_('Invalid Proteus board name: %s') % name)
             self.app.should_we_save = True
@@ -264,12 +269,14 @@ class appIO(QtCore.QObject):
                 state['finished'] = True
                 state['imported'] = state['imported'] or bool(ctx.collection.get_list())
 
+            # Firmware belongs to the whole Proteus project: open it once, with the first imported board.
+            firmware, state['firmware'] = state['firmware'], []
             batch = ObjectLoadBatch(self.app.app_obj, 1, finished, parent=self,
-                                    total=len(layers) + len(drills))
+                                    total=len(layers) + len(drills) + len(firmware))
             state['finished'] = False
             self.worker_task.emit({'fcn': batch.run,
                                    'params': [self.import_pcbdoc_objects,
-                                              [state['filename'], board, layers, drills]]})
+                                              [state['filename'], board, layers, drills, firmware]]})
         except Exception as error:
             self.log.error('Proteus import: %s', error)
             self.inform.emit('[ERROR_NOTCL] %s: %s' % (_('Import failed.'), error))
@@ -343,11 +350,13 @@ class appIO(QtCore.QObject):
             warnings = list(parsed.warnings)
             self._proteus_import = {'filename': filename, 'boards': list(parsed.boards),
                                     'warnings': list(dict.fromkeys(warnings)), 'selecting': False,
+                                    'firmware': list(getattr(parsed, 'firmware', [])),
                                     'finished': True, 'failed': not bool(parsed.boards), 'imported': False}
             self._proteus_timer.start()
             return
         pcb_format = self.PCB_FORMATS[kind]
         default_layers = getattr(parsed, 'default_layers', None)
+        default_drills = getattr(parsed, 'default_drill_groups', None)
         dialog = QtWidgets.QDialog(self.app.ui)
         dialog.setWindowTitle(self._pcb_title(kind))
         if kind == 'proteus':
@@ -374,7 +383,7 @@ class appIO(QtCore.QObject):
             if not any(tool.get('drills') or tool.get('slots') for tool in tools.values()):
                 continue
             checkbox = QtWidgets.QCheckBox(group)
-            checkbox.setChecked(True)
+            checkbox.setChecked(default_drills is None or group in default_drills)
             choices.addWidget(checkbox)
             drills[group] = checkbox
         scroll.setWidget(content)
@@ -407,7 +416,7 @@ class appIO(QtCore.QObject):
             self.worker_task.emit({'fcn': self.import_pcbdoc_objects,
                                    'params': [filename, parsed, selected_layers, selected_drills]})
 
-    def import_pcbdoc_objects(self, filename, parsed, selected_layers, selected_drills):
+    def import_pcbdoc_objects(self, filename, parsed, selected_layers, selected_drills, firmware=()):
         if self.app.abort_flag or not (selected_layers or selected_drills):
             return
         units = self.app.app_units.upper()
@@ -489,6 +498,21 @@ class appIO(QtCore.QObject):
                     created = True
                 if failed:
                     break
+            for path, text in ([] if failed else firmware):
+                if self.app.abort_flag:
+                    return
+
+                def init_document(obj, app, source=text):
+                    # Escaped preformatted text: '#include <...>' must not be read as rich text.
+                    obj.source_file = '<pre>%s</pre>' % html.escape(source)
+
+                name = '%s_%s' % (parsed.name, path.replace('\\', '/').rsplit('/', 1)[-1])
+                result = self.app.app_obj.new_object('document', name, init_document, plot=False,
+                                                     autoselected=False)
+                if result is None or result == 'fail':
+                    failed = True
+                    break
+                created = True
         except Exception as error:
             self.log.error('%s object import: %s', pcb_format['log'], error)
             failed = True

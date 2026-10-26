@@ -5,13 +5,14 @@
 
 """One parsed board per embedded LYT; no CAD application or CAM exports needed.
 
-parse_file() returns this result: boards, warnings and major_version (also exposed
-as detected_major_version). Each board has name, member_name, layers, drill_groups,
-warnings and default_layers. Verified layer keys carry Altium filename extensions;
+parse_file() returns this result: boards, warnings, firmware and major_version (also
+exposed as detected_major_version). Each board has name, member_name, layers, drill_groups,
+warnings and default_layers. firmware lists (path, text) for program source files. Verified layer keys carry Altium filename extensions;
 their display names remain in each layer's name field. Coordinates and tool diameters are millimetres.
 The caller owns project creation/selection; this facade has no UI side effects.
 """
 
+import os
 import re
 import zipfile
 import xml.etree.ElementTree as ET
@@ -24,11 +25,17 @@ class ProteusParser:
     DECODERS = {8: Proteus8Parser, 9: Proteus9Parser}
     MAX_MEMBER_BYTES = 64 * 1024 * 1024
     MAX_BOARD_BYTES = 256 * 1024 * 1024
+    MAX_SOURCE_BYTES = 4 * 1024 * 1024
+    # Program source only; build outputs (HEX, ELF, COF, LST) are not code.
+    SOURCE_EXTENSIONS = {'.c', '.h', '.cpp', '.cc', '.cxx', '.hpp', '.hh', '.hxx', '.ino', '.pde', '.asm',
+                         '.s', '.a51', '.inc', '.bas', '.pas', '.py', '.java', '.js', '.ts', '.lua', '.rs',
+                         '.go', '.vhd', '.vhdl', '.v', '.sv'}
 
     def __init__(self, app=None):
         self.app = app
         self.boards = []
         self.warnings = []
+        self.firmware = []
         self.major_version = None
 
     @property
@@ -38,6 +45,7 @@ class ProteusParser:
     def parse_file(self, filename):
         self.boards = []
         self.warnings = []
+        self.firmware = []
         self.major_version = None
         try:
             with zipfile.ZipFile(str(filename)) as archive:
@@ -76,13 +84,71 @@ class ProteusParser:
                     boards.append(board)
                     self.warnings.extend('%s: %s' % (member.filename, warning) for warning in board.warnings)
                 self.boards = boards
+                self.firmware = self._firmware(archive, files, os.path.dirname(os.path.abspath(str(filename))))
         except ProteusParseError:
             self.boards = []
+            self.firmware = []
             raise
         except (OSError, zipfile.BadZipFile, RuntimeError, EOFError, ET.ParseError) as error:
             self.boards = []
             raise ProteusParseError('Cannot read Proteus project: %s' % error) from error
         return self
+
+    def _firmware(self, archive, files, folder):
+        """Embedded source members, then FIRMWARE.XML references found beside the project file."""
+        sources = {}
+        for key in sorted(files, key=self._member_order):
+            if os.path.splitext(key)[1].lower() in self.SOURCE_EXTENSIONS:
+                member = files[key]
+                if member.file_size > self.MAX_SOURCE_BYTES:
+                    self.warnings.append('Firmware source %s is too large; not imported' % member.filename)
+                    continue
+                sources[key] = (member.filename.replace('\\', '/'), self._source_text(
+                    self._read_member(archive, member)))
+        if 'FIRMWARE.XML' not in files:
+            return list(sources.values())
+        metadata = self._read_member(archive, files['FIRMWARE.XML'])
+        if b'<!ENTITY' in metadata.upper() or b'<!DOCTYPE' in metadata.upper():
+            self.warnings.append('FIRMWARE.XML has entity/DOCTYPE declarations; firmware references ignored')
+            return list(sources.values())
+        try:
+            root = ET.fromstring(metadata)
+        except ET.ParseError as error:
+            self.warnings.append('FIRMWARE.XML cannot be read: %s' % error)
+            return list(sources.values())
+        # The firmware schema is not documented: accept any attribute or text naming a source file.
+        for element in root.iter():
+            for value in list(element.attrib.values()) + [element.text or '']:
+                value = value.strip().replace('\\', '/')
+                if os.path.splitext(value)[1].lower() not in self.SOURCE_EXTENSIONS:
+                    continue
+                if value.upper() in sources or value.upper().lstrip('/') in sources:
+                    continue
+                path = os.path.abspath(os.path.join(folder, value))
+                key = os.path.normcase(path)
+                if key in sources:
+                    continue
+                # Read only beside the project: a project file must not pull in arbitrary local files.
+                if os.path.isabs(value) or not key.startswith(os.path.normcase(folder) + os.sep):
+                    self.warnings.append('Firmware source %s is outside the project folder; not imported' % value)
+                    continue
+                try:
+                    if os.path.getsize(path) > self.MAX_SOURCE_BYTES:
+                        self.warnings.append('Firmware source %s is too large; not imported' % value)
+                        continue
+                    with open(path, 'rb') as handle:
+                        sources[key] = (value, self._source_text(handle.read()))
+                except OSError:
+                    self.warnings.append('Firmware source %s is not embedded and was not found beside the '
+                                         'project' % value)
+        return list(sources.values())
+
+    @staticmethod
+    def _source_text(data):
+        try:
+            return data.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            return data.decode('cp1252', errors='replace')
 
     @staticmethod
     def _member_order(name):

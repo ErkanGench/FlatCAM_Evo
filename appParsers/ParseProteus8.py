@@ -7,7 +7,8 @@
 
 The supported wire schemas use technology version 1, package versions 847/907.
 All positions are signed 1/100000 mm; angles are tenths of a degree. Unknown
-manufacturing semantics are diagnosed and unverified layers aren't defaults.
+manufacturing semantics are diagnosed; unidentified numeric layers are imported
+as Mechanical N (GMN) and aren't default layers.
 """
 
 import math
@@ -15,9 +16,12 @@ import re
 import struct
 from typing import NoReturn
 
-from shapely import LineString, Point, Polygon, box, make_valid
+import numpy as np
+from shapely import LineString, MultiPolygon, Point, Polygon, STRtree, box, make_valid
 from shapely.affinity import affine_transform
 from shapely.ops import unary_union
+
+from camlib import circle_quad_segs, gerber_circle_steps
 
 
 class ProteusParseError(ValueError):
@@ -111,13 +115,16 @@ class Proteus8Parser:
     LIBRARY_MARKER = b'\xfe\xff'
     NET_RULE_BYTES = 35
     TITLE_FROM_ARTWORK = True
+    _font_parser = None  # shared system-font table, see _text_geometry
 
     def __init__(self, app=None):
         self.app = app
+        self._options = getattr(app, 'options', None)
         self.layers = {}
         self.drill_groups = {}
         self.warnings = []
         self.default_layers = []
+        self.default_drill_groups = []
         self.name = ''
         self.member_name = ''
         self._solids = {}
@@ -129,6 +136,7 @@ class Proteus8Parser:
         self._layer_display_names = {}
         self._layer_extensions = {}
         self._copper = []
+        self._unidentified = []
         self._pad_styles = []
         self._style_names = {}
         self._trace_styles = []
@@ -346,16 +354,16 @@ class Proteus8Parser:
             raise ProteusParseError('Duplicate native layer identity %d' % layer)
         label = name
         while label in self._layer_names.values():
-            label = '%s (layer %d)' % (label, layer)
+            label = '%s (layer %s)' % (label, layer)
         self._layer_names[layer] = label
         self._layer_display_names[label] = name
         return label
 
     def _layer(self, layer):
-        if isinstance(layer, str):
-            return layer
         if layer in self._layer_names:
             return self._layer_names[layer]
+        if isinstance(layer, str):
+            return self._remember_layer(layer, layer)
         manufacturing = {36: ('Top Silk Screen', 'GTO'), 37: ('Bottom Silk Screen', 'GBO'),
                          38: ('Top Resist', 'GTS'), 39: ('Bottom Resist', 'GBS'),
                          40: ('Top SMT Paste', 'GTP'), 41: ('Bottom SMT Paste', 'GBP'),
@@ -365,9 +373,10 @@ class Proteus8Parser:
             label = self._remember_layer(layer, name)
             self._layer_extensions[label] = extension
             return label
-        self._warn('Native layer %d has unverified manufacturing semantics; retained as a non-default preview layer' %
-                   layer)
-        return 'Layer %d (unverified)' % layer
+        # Numbered in _finish: layers are discovered lazily while parsing.
+        label = self._remember_layer(layer, 'Layer %d (unverified)' % layer)
+        self._unidentified.append(layer)
+        return label
 
     def _add(self, layer, geometry, follow=None):
         name = self._layer(layer)
@@ -376,13 +385,16 @@ class Proteus8Parser:
         if follow is not None and not follow.is_empty:
             self._follows.setdefault(name, []).append(follow)
 
-    @staticmethod
-    def _stroke(points, width):
+    def _segs(self, radius):
+        # Gerber "Circle Steps" preference (adaptive by default); positions here are millimetres.
+        return circle_quad_segs(gerber_circle_steps(self._options, radius, 'MM'))
+
+    def _stroke(self, points, width):
         if width <= 0:
             return Polygon()
         if len(set(points)) == 1:
-            return Point(points[0]).buffer(width / 2, quad_segs=32)
-        return LineString(points).buffer(width / 2, quad_segs=32)
+            return Point(points[0]).buffer(width / 2, quad_segs=self._segs(width / 2))
+        return LineString(points).buffer(width / 2, quad_segs=self._segs(width / 2))
 
     def _text_attribute(self, r):
         r.expect(b'\xff')
@@ -403,12 +415,14 @@ class Proteus8Parser:
         geometry = None
         if font not in ('Vector Font', 'Default Font', ''):
             from appParsers.ParseFont import ParseFont
-            if not hasattr(self, '_font_parser'):
-                self._font_parser = ParseFont(self.app)
-                self._font_parser.get_fonts_by_types()
-            if font in self._font_parser.regular_f:
+            # Scanning the system fonts takes seconds: do it once per process, not once per board.
+            if Proteus8Parser._font_parser is None:
+                fonts = ParseFont(self.app)
+                fonts.get_fonts_by_types()
+                Proteus8Parser._font_parser = fonts
+            if font in Proteus8Parser._font_parser.regular_f:
                 # Render at one inch/em, then scale down: small hinted glyphs lose detail.
-                rendered = self._font_parser.font_to_geometry(text, font, 'regular', 72, units='MM')
+                rendered = Proteus8Parser._font_parser.font_to_geometry(text, font, 'regular', 72, units='MM')
                 if not isinstance(rendered, str):
                     geometry = unary_union(rendered)
                     geometry = affine_transform(geometry, (height / 25.4, 0, 0, height / 25.4, 0, 0))
@@ -449,10 +463,7 @@ class Proteus8Parser:
             elif kind == 3:
                 self._graphic(r)
             elif kind == 5:
-                layer = r.number()
-                r.take(16 + 8)  # transform and physical bitmap dimensions
-                r.take(r.number())  # DIB payload, including its palette and pixel data
-                self._warn('Bitmap artwork on native layer %d is not rendered' % layer)
+                self._bitmap(r)
             elif kind == 6:
                 layer = r.number()
                 r.take(4 + 16 + 2 + 8 + 24)
@@ -462,6 +473,41 @@ class Proteus8Parser:
                 self._warn('Dimension annotations on native layer %d are not rendered' % layer)
             else:
                 r.fail('unsupported unframed placed-object class %d' % kind)
+
+    def _bitmap(self, r):
+        layer = r.number()
+        flags, x, y, rotation, width, height = r.unpack('6i')  # x, y: bottom-left corner
+        dib = r.subreader(r.number())
+        if dib.remaining < 40:
+            dib.fail('bitmap DIB header is truncated')
+        size, w, h, _, bpp, compression, _, _, _, used, _ = dib.unpack('IiiHHIIiiII')
+        if size < 40 or w <= 0 or h == 0 or width <= 0 or height <= 0:
+            dib.fail('invalid bitmap DIB header')
+        dib.take(size - 40)
+        if flags or rotation or bpp != 1 or compression:
+            reason = 'flags/rotation' if flags or rotation else '%d-bpp compression %d' % (bpp, compression)
+            self._warn('Bitmap artwork on native layer %d is not rendered (%s unsupported)' % (layer, reason))
+            return
+        dib.take(4 * (used or 2))  # palette; ink is the set bit, whatever its colour
+        stride = (w + 31) // 32 * 4
+        rows = abs(h)
+        pixels = np.unpackbits(np.frombuffer(dib.take(stride * rows), np.uint8).reshape(rows, stride),
+                               axis=1)[:, :w]
+        pw, ph = width / self.SCALE / w, height / self.SCALE / rows
+        x0, y0 = x / self.SCALE, y / self.SCALE
+        boxes = []
+        for k in range(rows):
+            row = pixels[k]
+            if not row.any():
+                continue
+            edges = np.flatnonzero(np.diff(np.concatenate(([0], row, [0]))))
+            line = k if h > 0 else rows - 1 - k  # bottom-up unless the height is negative
+            for start, end in zip(edges[::2], edges[1::2]):
+                boxes.append(box(x0 + start * pw, y0 + line * ph, x0 + end * pw, y0 + (line + 1) * ph))
+        if boxes:
+            self._add(layer, unary_union(boxes))
+        self._warn('Bitmap artwork on native layer %d is drawn from its set pixels; verify the ink polarity '
+                   'before fabrication' % layer)
 
     def _standalone_pad(self, r):
         r.fail('unsupported unframed standalone pad class for this wire schema')
@@ -518,6 +564,10 @@ class Proteus8Parser:
         matrix = self._matrix(x / self.SCALE, y / self.SCALE, angle, reflection)
         if isinstance(geometry, dict):
             for number, shape in geometry.items():
+                if number > 15:  # stack mask/paste entries, already grown by the stack guard
+                    if supported_span:
+                        self._add(number, affine_transform(shape, matrix))
+                    continue
                 target = number if supported_span else 'Pad span 0x%x (layer %d; unverified)' % (span, number)
                 self._add(target, affine_transform(shape, matrix))
         elif geometry is not None:
@@ -525,9 +575,9 @@ class Proteus8Parser:
             for number in layers:
                 target = number if supported_span else 'Pad span 0x%x (layer %d; unverified)' % (span, number)
                 self._add(target, shape)
-            if supported_span and fields[1] != 'PSMPAD':
-                guard = self._length(fields[5])
-                opening = affine_transform(geometry.buffer(guard, quad_segs=32), matrix)
+            if supported_span:
+                guard = self._length(fields[5]) if len(fields) > 5 and fields[5] else 0.0
+                opening = affine_transform(geometry.buffer(guard, quad_segs=self._segs(guard)), matrix)
                 for number in layers:
                     if number in (0, 15):
                         self._add(38 if number == 0 else 39, opening)
@@ -536,12 +586,15 @@ class Proteus8Parser:
                 self._warn('Per-pad mask suppression and paste reduction/suppression rules are not fully '
                            'verified; ordinary pad guard gaps and unchanged eligible SMD paste are used')
         if drill > 0:
-            group = ('PTH' if plated else 'NPTH') if supported_span else 'Unverified span 0x%x' % span
+            group = 'PTH' if plated else 'NPTH'  # a drilled pad is a real hole whatever its span
+            if not supported_span:
+                self._warn('Pad with drill on unverified span 0x%x: the hole is kept as a real %s drill' %
+                           (span, group))
             key = round(drill, 6)
             tool = self._drills.setdefault(group, {}).setdefault(key, {'tooldia': drill, 'drills': [], 'slots': []})
             tool['drills'].append(Point(x / self.SCALE, y / self.SCALE))
         if supported_span:
-            return list(geometry) if isinstance(geometry, dict) else layers
+            return [number for number in geometry if number <= 15] if isinstance(geometry, dict) else layers
         return []
 
     def _pad_shape(self, fields, extra, r: _Reader, layers, stack=False):
@@ -550,19 +603,27 @@ class Proteus8Parser:
             if stack or len(fields) < 4 or fields[2] != 'HOLE' or len(extra) != 20:
                 r.fail('unsupported or corrupt stacked pad style %s' % name)
             geometry = {}
-            for layer in layers:
-                if layer > 15:
-                    continue
-                target = extra[layer]
+            guard = self._length(fields[4]) if len(fields) > 4 and fields[4] else 0.0
+            # Entries 0..15 copper, 16/17 resist, 18/19 paste (top, bottom).
+            entries = [(layer, layer) for layer in layers if layer <= 15]
+            for side, entry in ((0, 16), (15, 17), (0, 18), (15, 19)):
+                if side in layers:
+                    entries.append((22 + entry, entry))  # 16..19 -> layers 38..41
+            for number, entry in entries:
+                target = extra[entry]
                 if target == '<NONE>':
                     continue
                 if target not in self._style_names:
                     r.fail('stack %s references missing style %s' % (name, target))
                 subfields, points = self._style_names[target]
-                shape, _, _ = self._pad_shape(subfields, points, r, [layer], stack=True)
-                if shape is not None:
-                    geometry[layer] = shape
-            self._warn('Stacked pad mask/paste entries are not expanded; only explicit copper entries are used')
+                shape, _, _ = self._pad_shape(subfields, points, r, [number], stack=True)
+                if shape is None:
+                    continue
+                if number in (38, 39):
+                    shape = shape.buffer(guard, quad_segs=self._segs(guard))
+                geometry[number] = shape
+            self._warn('Stacked pad mask/paste guard semantics are unverified; resist is the entry grown by the '
+                       'stack guard, paste the entry unchanged')
             return geometry, self._length(fields[3]), True
         if kind == 'PSMPAD':
             try:
@@ -572,7 +633,8 @@ class Proteus8Parser:
                 r.fail('invalid polygon pad %s: %s' % (name, error))
             if count != len(points) or count < 3 or any(len(point) != 2 for point in points):
                 r.fail('invalid polygon pad vertex count for %s' % name)
-            self._warn('Custom polygon pad mask/paste rules are not verified; only saved copper artwork is used')
+            self._warn('Custom polygon pad paste and per-pad mask suppression are not verified; copper and a '
+                       'guard-grown mask opening are used')
             return self._valid(Polygon(points)), 0.0, True
         if len(fields) < 10:
             r.fail('incomplete pad style %s' % name)
@@ -588,7 +650,7 @@ class Proteus8Parser:
         if options & ~4:
             self._warn('Pad style %s flags 0x%x have unverified shape/offset semantics' % (name, options))
         if kind in ('CPAD', 'CSMPAD', 'CVIA'):
-            geometry = affine_transform(Point(0, 0).buffer(1, quad_segs=32),
+            geometry = affine_transform(Point(0, 0).buffer(1, quad_segs=self._segs(max(width, height) / 2)),
                                         (width / 2, 0, 0, height / 2, 0, 0))
         elif kind in ('SPAD', 'RSMPAD', 'DPAD'):
             radius = self._length(fields[8])
@@ -604,7 +666,7 @@ class Proteus8Parser:
                               (width / 2 - radius, height / 2 - radius)]
                     geometry = self._stroke(points, 2 * radius)
                 else:
-                    geometry = inner.buffer(radius, quad_segs=32)
+                    geometry = inner.buffer(radius, quad_segs=self._segs(radius))
             else:
                 geometry = box(-width / 2, -height / 2, width / 2, height / 2)
         else:
@@ -663,7 +725,8 @@ class Proteus8Parser:
             x, y, radius = r.unpack('iii')
             if radius <= 0:
                 r.fail('non-positive graphic radius')
-            shape = Point(x / self.SCALE, y / self.SCALE).buffer(radius / self.SCALE, quad_segs=32)
+            shape = Point(x / self.SCALE, y / self.SCALE).buffer(radius / self.SCALE,
+                                                                 quad_segs=self._segs(radius / self.SCALE))
             if layer == 59 and hollow:
                 r.finish()
                 # Native board-edge circles are padless cutouts, not plated pad artwork.
@@ -705,7 +768,7 @@ class Proteus8Parser:
         if shape is not None:
             if kind not in (0, 3, 4) and hollow:
                 follow = shape.boundary
-                shape = follow.buffer(max(width, 0) / 2, quad_segs=32)
+                shape = follow.buffer(max(width, 0) / 2, quad_segs=self._segs(max(width, 0) / 2))
             shape = affine_transform(shape, matrix)
             follow = affine_transform(follow, matrix) if follow is not None else None
             self._add(layer, shape, follow)
@@ -737,9 +800,9 @@ class Proteus8Parser:
         if not count:
             self._warn('Region on layer %d has no saved fill; editable envelope is not substituted' % layer)
         target = layer
-        if not net:
+        if not net and layer in self._copper:
             target = 'Unassigned region on layer %d (unverified)' % layer
-            self._warn('Region with empty net on layer %d has unresolved additive/keepout semantics; '
+            self._warn('Region with empty net on copper layer %d has unresolved additive/keepout semantics; '
                        'retained on a non-default preview layer' % layer)
         for _ in range(count):
             outer = self._ring(r)
@@ -807,12 +870,35 @@ class Proteus8Parser:
         self._warn('Route endpoint trimming/cap options are not fully verified; '
                    'declared-width round-capped centreline strokes are used')
 
+    def _name_mechanical(self):
+        number = 0
+        for layer in sorted(self._unidentified):
+            old = self._layer_names[layer]
+            if not self._solids.get(old):
+                continue
+            number += 1
+            label = name = 'Mechanical %d' % number
+            while label in self._layer_names.values():
+                label = '%s (layer %s)' % (label, layer)
+            self._layer_names[layer] = label
+            self._layer_display_names.pop(old, None)
+            self._layer_display_names[label] = name
+            self._layer_extensions[label] = 'GM%d' % number
+            self._solids[label] = self._solids.pop(old)
+            if old in self._follows:
+                self._follows[label] = self._follows.pop(old)
+            self._warn('Native layer %d has no verified Proteus name; imported as Mechanical %d (GM%d), '
+                       'not a default layer' % (layer, number, number))
+
     def _finish(self):
+        self._name_mechanical()
         for group, diameters in self._drills.items():
             self.drill_groups[group] = {number: diameters[key]
                                         for number, key in enumerate(sorted(diameters), 1)}
+        self.default_drill_groups = [group for group in self.drill_groups
+                                     if group in ('PTH', 'NPTH')]
         for name, shapes in self._solids.items():
-            polygons = self._polygons(self._valid(unary_union(shapes)))
+            polygons = self._polygons(self._valid(self._union(shapes)))
             polygons.sort(key=lambda polygon: Polygon(polygon.exterior).area, reverse=True)
             if not polygons:
                 continue
@@ -826,6 +912,31 @@ class Proteus8Parser:
                                for layer in self._copper + [36, 37, 38, 39, 40, 41, 59]
                                if layer in self._layer_names
                                if self._layer_key(self._layer_names[layer]) in self.layers]
+
+    @staticmethod
+    def _union(shapes):
+        """Union only the shapes that touch: an R-tree groups them, isolated shapes pass unchanged."""
+        shapes = [shape for shape in shapes if not shape.is_empty]
+        if len(shapes) < 2:
+            return unary_union(shapes)
+        root = list(range(len(shapes)))
+
+        def find(i):
+            while root[i] != i:
+                root[i] = root[root[i]]
+                i = root[i]
+            return i
+
+        # Bounding boxes are enough to group; the union of each group is exact.
+        first, second = STRtree(shapes).query(shapes)
+        for i, j in zip(first.tolist(), second.tolist()):
+            if i < j:
+                root[find(j)] = find(i)
+        groups = {}
+        for i in range(len(shapes)):
+            groups.setdefault(find(i), []).append(shapes[i])
+        parts = [members[0] if len(members) == 1 else unary_union(members) for members in groups.values()]
+        return MultiPolygon([polygon for part in parts for polygon in Proteus8Parser._polygons(part)])
 
     def _layer_key(self, name):
         extension = self._layer_extensions.get(name)
