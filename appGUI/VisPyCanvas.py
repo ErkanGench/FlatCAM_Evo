@@ -162,6 +162,13 @@ class VisPyCanvas(scene.SceneCanvas):
         tr = self.grid.get_transform('visual', 'canvas')
         return tr.map(pos)
 
+    def align_jump(self, location):
+        """Pan by a fraction of a pixel to put the target under the integer OS cursor."""
+        pixel = np.round(self.translate_coords_2(location)[:2])
+        actual = self.translate_coords(pixel)
+        self.view.camera.pan((location[0] - actual[0], location[1] - actual[1]))
+        return pixel
+
 
 class Camera(scene.PanZoomCamera):
 

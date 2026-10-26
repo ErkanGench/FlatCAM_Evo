@@ -233,6 +233,52 @@ class TestPlotCanvas3d(unittest.TestCase):
         self.assertLessEqual(screen[:, 1].max(), height * 0.9 + 1e-3)
         self.assertTrue(np.any(np.isclose(np.ptp(screen, axis=0), (width * 0.8, height * 0.8))))
 
+    def test_notebook_resize_keeps_grid_fixed_on_screen(self):
+        fcapp, canvas = self.make_hud_canvas()
+        layout = QtWidgets.QVBoxLayout(fcapp.ui)
+        splitter = QtWidgets.QSplitter()
+        layout.addWidget(splitter)
+        splitter.addWidget(QtWidgets.QTabWidget())
+        right_widget = QtWidgets.QWidget()
+        splitter.addWidget(right_widget)
+        right_layout = QtWidgets.QVBoxLayout(right_widget)
+        plot_tabs = QtWidgets.QTabWidget()
+        right_layout.addWidget(plot_tabs)
+        plot_tab = QtWidgets.QWidget()
+        plot_tabs.addTab(plot_tab, 'Plot Area')
+        QtWidgets.QVBoxLayout(plot_tab).addWidget(canvas.native)
+        fcapp.ui.resize(1000, 600)
+        splitter.setSizes([0, 1000])
+        fcapp.ui.show()
+        self.addCleanup(fcapp.ui.close)
+        QtTest.QTest.qWait(30)
+        canvas.view.camera.rect = (3, 4, 0.04, 0.04)
+        pointer = canvas.native.mapToGlobal(QtCore.QPoint(650, 250))
+        point = canvas.translate_coords((650, 250))[:2]
+        scale = canvas.pixel_size()
+        grid_points = np.array([point, point + (0.001, 0.001)])
+        origin = canvas.native.mapToGlobal(QtCore.QPoint())
+        screen = np.array([canvas.translate_coords_2(p)[:2] for p in grid_points])
+        screen += (origin.x(), origin.y())
+        for sizes in ([250, 750], [350, 650], [800, 200], [0, 1000]):
+            with self.subTest(sizes=sizes):
+                splitter.setSizes(sizes)
+                QtTest.QTest.qWait(30)
+                local = canvas.native.mapFromGlobal(pointer)
+                actual = canvas.translate_coords((local.x(), local.y()))[:2]
+                np.testing.assert_allclose(actual, point, rtol=0, atol=1e-6)
+                self.assertAlmostEqual(canvas.pixel_size() / scale, 1, places=5)
+                origin = canvas.native.mapToGlobal(QtCore.QPoint())
+                actual_screen = np.array([canvas.translate_coords_2(p)[:2] for p in grid_points])
+                actual_screen += (origin.x(), origin.y())
+                np.testing.assert_allclose(actual_screen, screen, rtol=0, atol=0.1)
+        # An explicit new view takes precedence over a pending layout adjustment.
+        splitter.setSizes([250, 750])
+        canvas.view.camera.rect = (10, 20, 1, 1)
+        QtTest.QTest.qWait(30)
+        self.assertEqual(canvas.view.camera.rect.pos, (10, 20))
+        self.assertEqual(canvas.view.camera.rect.size, (1, 1))
+
     def make_hud_canvas(self, **options):
         fcapp = CanvasApp()
         fcapp.options.update({'global_axis_color': '#FF0000', 'global_backface_culling': True})

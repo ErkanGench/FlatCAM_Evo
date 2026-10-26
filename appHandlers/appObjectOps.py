@@ -578,11 +578,12 @@ class AppObjectOps(QtCore.QObject):
         self.app.jump_signal.emit(location)
 
         if fit_center:
-            self.app.plotcanvas.fit_center(loc=location)
+            center = self.app.plotcanvas.view.camera.rect.center
+            self.app.plotcanvas.view.camera.pan((location[0] - center[0], location[1] - center[1]))
 
         cursor = QtGui.QCursor()
 
-        jump_loc = self.app.plotcanvas.translate_coords_2((location[0], location[1]))
+        jump_loc = self.app.plotcanvas.align_jump((location[0], location[1]))
         j_pos = self.app.plotcanvas.native.mapToGlobal(
             QPoint(round(jump_loc[0]), round(jump_loc[1]))
         )
@@ -666,7 +667,7 @@ class AppObjectOps(QtCore.QObject):
 
         cursor = QtGui.QCursor()
 
-        jump_loc = self.app.plotcanvas.translate_coords_2((location[0], location[1]))
+        jump_loc = self.app.plotcanvas.align_jump((location[0], location[1]))
         j_pos = self.app.plotcanvas.native.mapToGlobal(
             QPoint(round(jump_loc[0]), round(jump_loc[1]))
         )

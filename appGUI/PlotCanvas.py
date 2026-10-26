@@ -224,6 +224,12 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         self._cursor_color = Color(self.fcapp.cursor_color_3D).rgba
         self._cursor_position = None
         self._cursor_line_color = None
+        self._layout_anchor = None
+        self._layout_origin = None
+        self._layout_window = None
+        self._layout_anchor_timer = QtCore.QTimer(self)
+        self._layout_anchor_timer.setSingleShot(True)
+        self._layout_anchor_timer.timeout.connect(self._restore_layout_anchor)
         self.native.installEventFilter(self)
         self.events.mouse_move.connect(self._show_cursor_on_move)
 
@@ -606,12 +612,41 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         return self.c
 
     def eventFilter(self, obj, event):
+        if obj is self.native and event.type() == QtCore.QEvent.Type.Paint and self._layout_anchor is None:
+            self._layout_window = self.native.window()
+            self._layout_origin = self.native.mapTo(self._layout_window, QtCore.QPoint())
+        if obj is self.native and event.type() in (QtCore.QEvent.Type.Move, QtCore.QEvent.Type.Resize):
+            if (self._layout_anchor is None and self.native.isVisible() and self._layout_origin is not None
+                    and self.native.window() is self._layout_window):
+                # Parents can move without sending the canvas a Move event.
+                origin = self._layout_window.mapToGlobal(self._layout_origin)
+                rect = self.view.camera.rect
+                self._layout_anchor = (origin, self.translate_coords((0, 0))[:2],
+                                       self.pixel_size(), (rect.pos, rect.size))
+            # Restore once Qt and VisPy have finished the splitter's move/resize events.
+            self._layout_anchor_timer.start(0)
         if obj is self.native and self.c is not None and event.type() in (
                 QtCore.QEvent.Type.Enter, QtCore.QEvent.Type.Leave):
             visuals = (self.cursor_h_line, self.cursor_v_line) if self.big_cursor else (self.c,)
             for visual in visuals:
                 visual.visible = event.type() == QtCore.QEvent.Type.Enter
         return super().eventFilter(obj, event)
+
+    def _restore_layout_anchor(self):
+        anchor, self._layout_anchor = self._layout_anchor, None
+        same_window = self.native.window() is self._layout_window
+        self._layout_window = self.native.window()
+        self._layout_origin = self.native.mapTo(self._layout_window, QtCore.QPoint())
+        if anchor is None or not self.native.isVisible() or not same_window:
+            return
+        origin, point, scale, old_rect = anchor
+        local = self.native.mapFromGlobal(origin)
+        rect = self.view.camera.rect
+        if (rect.pos, rect.size) != old_rect:
+            return
+        self.view.camera.zoom(scale / self.pixel_size())
+        actual = self.translate_coords((local.x(), local.y()))
+        self.view.camera.pan((point[0] - actual[0], point[1] - actual[1]))
 
     def _show_cursor_on_move(self, event=None):
         # a mouse move proves the mouse is over the canvas: a Leave with no Enter after it (a modal dialog, an editor

@@ -20,6 +20,7 @@ app.use_app('pyqt6')
 from appGUI.VisPyCanvas import VisPyCanvas
 from appGUI.PlotCanvas import PlotCanvas
 from appHandlers.appObjectOps import AppObjectOps
+from appHandlers.appCanvasEvents import AppCanvasEvents
 
 
 class TestJumpTo(unittest.TestCase):
@@ -73,6 +74,61 @@ class TestJumpTo(unittest.TestCase):
             target = handler.on_jump_to()
         self.assertEqual(target, (start[0] + 0.125, start[1] - 0.25))
 
+    def test_jump_click_matches_target_and_canvas(self):
+        fcapp, handler = self.make_handler()
+        canvas = fcapp.plotcanvas
+        events = AppCanvasEvents(fcapp)
+        events.on_plugin_mouse_move = Mock()
+        fcapp.options['global_selection_shape'] = False
+        fcapp.ui.shell_dock = Mock()
+        fcapp.ui.popMenu = SimpleNamespace(mouse_is_panning=False)
+        for target in ((3.4, 4.5), (15.2, 13.4)):
+            with self.subTest(target=target), patch.object(QtGui.QCursor, 'setPos'):
+                handler.on_jump_to(custom_location=target)
+                pixel = np.round(canvas.translate_coords_2(target)[:2])
+                canvas.events.mouse_move(pos=pixel)
+                event = SimpleNamespace(pos=pixel, button=1)
+                events.on_mouse_click_over_plot(event)
+                # 0.00001 mm is 100 times finer than the requested one-micron precision.
+                np.testing.assert_allclose(fcapp.mouse_click_pos, target, rtol=0, atol=1e-5)
+                np.testing.assert_allclose(fcapp.mouse_pos, target, rtol=0, atol=1e-5)
+                np.testing.assert_allclose(fcapp.ui.update_location_labels.call_args.args,
+                                           (0.0, 0.0, *target), rtol=0, atol=1e-5)
+                np.testing.assert_allclose(canvas.on_update_text_hud.call_args.args,
+                                           (0.0, 0.0, *target), rtol=0, atol=1e-5)
+                actual = canvas.grid.get_transform('canvas', 'visual').map(pixel)
+                np.testing.assert_array_equal(canvas.translate_coords(pixel), actual)
+
+    def test_jump_target_aligns_with_canvas_after_wheel_zoom(self):
+        fcapp, handler = self.make_handler()
+        canvas = fcapp.plotcanvas
+        canvas.view.camera.rect = Rect(-20, -20, 40, 40)
+        target = (3.2, 4.3)
+        with patch.object(QtGui.QCursor, 'setPos'):
+            handler.on_jump_to(custom_location=target)
+        pixel = np.round(canvas.translate_coords_2(target)[:2])
+        for _ in range(45):
+            canvas.view.camera.last_time = 0
+            canvas.events.mouse_wheel(pos=pixel, delta=(0, 1), modifiers=())
+        self.assertLess(canvas.view.camera.rect.width, 0.02)
+        # Check the real grid transform independently of the coordinate readout.
+        actual = canvas.grid.get_transform('canvas', 'visual').map(pixel)[:2]
+        np.testing.assert_allclose(actual, target, rtol=0, atol=1e-6)
+        np.testing.assert_allclose(canvas.translate_coords_2(target)[:2], pixel, rtol=0, atol=0.1)
+
+    def test_jump_centers_target_without_changing_zoom(self):
+        fcapp, handler = self.make_handler()
+        canvas = fcapp.plotcanvas
+        canvas.view.camera.rect = Rect(100, -80, 0.04, 0.03)
+        before = canvas.view.camera.rect.size
+        target = (3.2, 4.3)
+        with patch.object(QtGui.QCursor, 'setPos'):
+            handler.on_jump_to(custom_location=target)
+        np.testing.assert_allclose(canvas.view.camera.rect.size, before, rtol=0, atol=1e-12)
+        # Centering may shift less than a pixel to align the integer OS cursor.
+        np.testing.assert_allclose(canvas.view.camera.rect.center, target, rtol=0,
+                                   atol=canvas.pixel_size())
+
     def test_locate_updates_position_for_the_next_relative_jump(self):
         fcapp, handler = self.make_handler()
         obj = SimpleNamespace(bounds=lambda: (1.125, 2.25, 8, 9))
@@ -81,6 +137,8 @@ class TestJumpTo(unittest.TestCase):
                 patch.object(QtGui.QCursor, 'setPos'):
             target = handler.on_locate(obj, fit_center=False)
         self.assertEqual(tuple(fcapp.mouse_pos), target)
+        pixel = np.round(fcapp.plotcanvas.translate_coords_2(target)[:2])
+        np.testing.assert_allclose(fcapp.plotcanvas.translate_coords(pixel)[:2], target, rtol=0, atol=1e-5)
 
     def test_canvas_pixel_roundtrip_after_pan_zoom_and_resize(self):
         fcapp, _ = self.make_handler()
