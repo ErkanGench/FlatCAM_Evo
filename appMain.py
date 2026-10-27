@@ -931,8 +931,16 @@ class App(QtCore.QObject):
         # current_defaults_path = os.path.join(self.data_path, "current_defaults.FlatConfig")
         current_defaults_path = self.defaults_path()
         
-        # ponytail: legacy compatibility - discover versioned files if stable file doesn't exist
-        if user_defaults and not os.path.isfile(current_defaults_path):
+        # ponytail: legacy compatibility - discover versioned files if stable file doesn't exist. _setup_paths_and_config()
+        # writes an empty stable file ('{}') when there is none, so an empty one holds no preferences either
+        nothing_saved = not os.path.isfile(current_defaults_path)
+        if user_defaults and not nothing_saved:
+            try:
+                with open(current_defaults_path, encoding='utf-8') as stream:
+                    nothing_saved = json.load(stream) == {}
+            except (OSError, ValueError):
+                pass
+        if user_defaults and nothing_saved:
             legacy_path = AppDefaults.find_legacy_defaults_file(self.data_path, str(self.version))
             if legacy_path:
                 self.log.debug(f'Found legacy defaults file: {legacy_path}')
