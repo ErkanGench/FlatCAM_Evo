@@ -330,6 +330,10 @@ class RegisterFK(QtCore.QObject):
         self.prj_list = extensions.prj_list
         self.conf_list = extensions.conf_list
 
+        # the names of the objects (prepend_keyword() / remove_keyword()), kept apart: a rebuild of the keywords from
+        # the Preferences must not drop them from the auto-completer
+        self.object_names = []
+
         autocomplete_kw_list = self.options.get('util_autocomplete_keywords').replace(' ', '').split(',')
         self.myKeywords = self.tcl_commands_list + autocomplete_kw_list + self.tcl_keywords
 
@@ -409,8 +413,13 @@ class RegisterFK(QtCore.QObject):
         self.myKeywords = keywords
         self.shell.command_line().set_model_data(self.myKeywords)
 
+    def rebuild_keywords(self, kw_list):
+        # the object names first, where prepend_keyword() puts them
+        self.register_keywords(self.object_names + self.tcl_commands_list + kw_list + self.tcl_keywords)
+
     def prepend_keyword(self, kw, update=True):
         self.myKeywords.insert(0, kw)
+        self.object_names.insert(0, kw)
         if update:
             self.register_keywords(self.myKeywords)
 
@@ -425,6 +434,8 @@ class RegisterFK(QtCore.QObject):
         except ValueError:
             # the keyword was never registered; nothing to remove
             pass
+        if kw in self.object_names:
+            self.object_names.remove(kw)
         if update:
             self.register_keywords(self.myKeywords)
 
@@ -1062,8 +1073,7 @@ class RegisterFK(QtCore.QObject):
 
         # update the self.myKeywords so the model is updated
         autocomplete_kw_list = self.ui.util_pref_form.kw_group.kw_list_text.get_value().replace(' ', '').split(',')
-        self.myKeywords = self.tcl_commands_list + autocomplete_kw_list + self.tcl_keywords
-        self.register_keywords(self.myKeywords)
+        self.rebuild_keywords(autocomplete_kw_list)
 
     def del_extension(self, ext_type):
         """
@@ -1131,8 +1141,7 @@ class RegisterFK(QtCore.QObject):
 
         # update the self.myKeywords so the model is updated
         autocomplete_kw_list = self.ui.util_pref_form.kw_group.kw_list_text.get_value().replace(' ', '').split(',')
-        self.myKeywords = self.tcl_commands_list + autocomplete_kw_list + self.tcl_keywords
-        self.register_keywords(self.myKeywords)
+        self.rebuild_keywords(autocomplete_kw_list)
 
     def restore_extensions(self, ext_type):
         """
@@ -1163,8 +1172,7 @@ class RegisterFK(QtCore.QObject):
             self.ui.util_pref_form.kw_group.kw_list_text.set_value(', '.join(self.default_keywords))
 
             # update the self.myKeywords so the model is updated
-            self.myKeywords = self.tcl_commands_list + self.default_keywords + self.tcl_keywords
-            self.shell.command_line().set_model_data(self.myKeywords)
+            self.rebuild_keywords(self.default_keywords)
 
     def delete_all_extensions(self, ext_type):
         """
@@ -1184,5 +1192,4 @@ class RegisterFK(QtCore.QObject):
             self.ui.util_pref_form.kw_group.kw_list_text.set_value('')
 
             # update the self.myKeywords so the model is updated
-            self.myKeywords = self.tcl_commands_list + self.tcl_keywords
-            self.register_keywords(self.myKeywords)
+            self.rebuild_keywords([])

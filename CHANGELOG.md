@@ -61,11 +61,16 @@ File associations:
 - fixed: the first start registered no Gerber, Excellon or G-code extension (it read the Preferences lists before they were filled) and then removed the registry key of every extension in the saved lists, also of extensions that another program opens; Apply now removes an extension that left the list only where it still points to FlatCAM
 - fixed: the default G-code association list had 'h' and 'i', so a C header (.h) or a preprocessed C file (.i) opened in FlatCAM after Apply; they are no longer in the default list nor in its Restore (a G-code file with these extensions still opens from the file dialog). The first start no longer takes an extension that another program opens (Windows) and no longer makes FlatCAM the default program of the Gerber, Excellon and G-code extensions (macOS, duti); Apply still does
 
+Tcl Shell:
+
+- fixed: adding, deleting, restoring or clearing the autocomplete keywords in Preferences -> Utilities removed the names of the open objects from the auto-completer of the Tcl Shell
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - test_file_associations: the first start registers the extension lists of the options; Apply removes only the extensions that point to FlatCAM
 - test_file_associations: no .h / .i in the default and restored G-code lists; the first start leaves the extensions of other programs and runs no duti for the extensions
+- test_rename_completer: editing the autocomplete keywords keeps the object names, also the new name of a renamed object
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
