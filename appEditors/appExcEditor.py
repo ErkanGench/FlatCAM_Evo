@@ -2449,7 +2449,8 @@ class CopyEditorExc(FCShapeTool):
         if radius == 0:
             self.draw_app.delete_utility_geometry()
 
-        if len(self.points) >= 1 and radius > 0:
+        # the circle needs only the reference point (origin); self.points is set only by the Linear preview
+        if self.origin is not None and radius > 0:
             try:
                 if cdx < self.origin[0]:
                     radius = -radius

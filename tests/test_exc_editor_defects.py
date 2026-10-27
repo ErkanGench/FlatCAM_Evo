@@ -10,7 +10,7 @@ from PyQt6 import QtWidgets
 from shapely.affinity import translate
 from shapely.geometry import Point
 
-from appEditors.appExcEditor import AppExcEditor, DrillArray, SlotArray
+from appEditors.appExcEditor import AppExcEditor, CopyEditorExc, DrillArray, SlotArray
 from appEditors.appGeoEditor import AppGeoEditor, DrawTool
 from defaults import AppDefaults
 from test_exc_editor_history import drill, scene
@@ -242,3 +242,33 @@ def test_circular_array_add_button_keeps_the_typed_radius_after_a_mouse_move(cls
     tool.set_origin((0.0, 0.0))
     tool.utility_geometry(data=(6.0, 8.0))
     assert tool.ui.radius_entry.get_value() == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# 12. Copy, Array mode, Circular type: preview and copies without an earlier Linear preview
+# ---------------------------------------------------------------------------------------------------------------
+
+def copy_tool(**panel):
+    """A Copy tool (made without its plugin panel) on the scene() editor, the drill at (0, 0) selected."""
+    editor, _first, _second = scene()
+    editor.delete_utility_geometry = Mock()
+    tool = CopyEditorExc.__new__(CopyEditorExc)
+    DrawTool.__init__(tool, editor)
+    tool.name, tool.app, tool.has_selection, tool.sel_limit = 'drill_copy', editor.app, True, 30
+    tool.origin = tool.destination = tool.util_geo = None
+    tool.selected_dia_list = [1.0]
+    tool.draw_cursor_data = Mock()
+    tool.ui = SimpleNamespace(**{name: Entry(value) for name, value in panel.items()})
+    editor.active_tool = tool
+    return editor, tool
+
+
+def test_circular_copy_array_previews_and_copies_without_a_linear_preview_first():
+    editor, tool = copy_tool(mode_radio='a', array_type_radio='circular', array_size_entry=4, array_dir_radio='CCW',
+                             angle_entry=90.0)
+    tool.click((0.0, 0.0))
+    preview = tool.utility_geometry(data=(10.0, 0.0))
+    assert preview is not None and len(preview.geo) == 4 + 1  # the 4 copies and the radius line
+    tool.click((10.0, 0.0))
+    assert added_centers(editor) == pytest.approx([10, 0, 0, 10, -10, 0, 0, -10])
+    assert len(editor.points_edit[1.0]) == 1 + 4
