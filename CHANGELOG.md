@@ -60,12 +60,14 @@ Geometry editor:
 
 - fixed: Explode removed every selected shape but made lines only from closed outlines and Multi shapes: open paths and polygons were deleted, and a Multi shape threw away the lines of the shapes selected before it; open paths now explode into their segments, polygons into the segments of their outlines, and a shape that gives no lines (a single segment) is kept
 - fixed: Transform -> Buffer D buffered the outline of a polygon (the editor keeps a polygon as its outline) as a line: a positive distance made a band with 2 outlines and a negative one deleted the shape; the area inside the outline is now buffered and its outline kept, as in the Buffer tool, and an erosion that would leave nothing is refused with a message
+- fixed: a rectangle added from the Rectangle panel with Round or Bevel corners was larger than requested when the corner radius was more than half of a side (with the default radius 1, 10 x 1 gave 10 x 3) or when a size was negative (-10 x 4 gave 14 x 4); corners that do not fit are now square, as for a rectangle drawn with the mouse
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - added a Geometry editor check that Explode replaces every selected shape by its lines
 - added Geometry editor checks that Transform -> Buffer D moves a polygon outline by the distance and keeps a shape it would erode away
+- added a Geometry editor check of the rectangle size from the Rectangle panel with corners that do not fit
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

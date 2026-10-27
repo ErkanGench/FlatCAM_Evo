@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 from PyQt6 import QtCore, QtWidgets
 from shapely import STRtree
-from shapely.geometry import LineString, box
+from shapely.geometry import LineString, Polygon, box
 
 from appEditors.cursor_text import show_cursor_text, hide_cursor_text
 from appEditors.appGeoEditor import AppGeoEditor, DrawToolShape, DrawToolUtilityShape, FCPath, FCCircle, FCRectangle, FCMove, FCCopy
@@ -415,3 +415,21 @@ def test_transform_buffer_that_erodes_a_shape_away_keeps_it():
     assert tool.on_buffer_action(-3, 2) == 'fail'
     assert list(editor.storage.get_objects()) == [shape] and editor.selected == [shape]
     assert not any('[success]' in c.args[0] for c in editor.app.inform.emit.call_args_list)
+
+
+def panel_add(cls, linked=True, **values):
+    editor = editor_with_history()
+    ui = SimpleNamespace(**{name: value(number) for name, number in values.items()})
+    ui.radius_link_btn = SimpleNamespace(isChecked=lambda: linked)
+    cls.on_add(SimpleNamespace(draw_app=editor, app=editor.app, ui=ui, mode='add'))
+    return [shape.geo for shape in editor.storage.get_objects()]
+
+
+def test_rectangle_panel_keeps_the_size_when_the_corner_radius_does_not_fit():
+    # the default corners are Round with radius 1; when they do not fit the corners are square (as with the mouse)
+    for length, width, rounded in ((10, 1, False), (-10, 4, True), (10, 4, True)):
+        added = panel_add(RectangleEditorTool, anchor_radio='c', x_entry=0, y_entry=0, corner_radio='r',
+                          radius_entry=1, length_entry=length, width_entry=width)
+        assert len(added) == 1
+        assert added[0].bounds == pytest.approx((-5, -width / 2, 5, width / 2))
+        assert (Polygon(added[0]).area < 10 * width) == rounded
