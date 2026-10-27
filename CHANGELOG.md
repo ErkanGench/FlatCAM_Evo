@@ -23,6 +23,7 @@ PDF import:
 - repeated colors return to their original layer instead of creating duplicate layers; white clears and later islands keep their paint order across the color layers
 - repeated equal solids are removed unless an intervening clear requires the later copy to restore material; empty Gerber layers and empty drill groups no longer create objects
 - fixed: stray delimiters could leave the tokenizer in an endless loop; text-heavy fill processing reads ring coordinates once and skips rings that cannot affect the winding number
+- fixed: Stop did not cancel a long PDF parse: the parser kept the value of the abort flag at the start of the application; it now reads the flag while it parses, and a stopped file no longer leaves a promise that held back the rendering of the next PDF import
 
 Gerber editor:
 
@@ -76,6 +77,7 @@ Tests:
 - tests/test_geometry_transforms.py: the move and the scale of a native CNC job read the decimals once and keep the paths of the tools for the bounding box
 - tests/test_cncjob_gcode_speed.py: the autolevelling segments of a 300 mm line in steps of 0.25 mm
 - tests/test_gerber_parser.py: HPGL2 arcs one after the other, a 3-point arc, a file without SP and the commands on one line
+- tests/test_pdf_hole_detection.py: Stop while a PDF file is parsed
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
