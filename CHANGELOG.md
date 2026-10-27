@@ -68,12 +68,17 @@ Align Objects:
 
 - fixed: after an alignment (manual or automatic) View Source and Save source gave the file as it was before the alignment; the source of an aligned Gerber or Excellon object is now written again, as after a Transform
 
+Film:
+
+- fixed: a positive film punched at the pad centers failed with "Punch hole size is bigger than some of the apertures" for any Gerber with macro (AM) pads, such as the KiCad rounded rectangles, and for an aperture used only for tracks that is thinner than the punch; only the flashed pads are checked now, a macro or polygon pad by the width of the pad at its center
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - Cutout: a tool added from the search or from the Tools Database keeps the Automatic widgets and shows the widgets of its gap type
 - 2-Sided: a warning when the alignment holes do not fit the pins after the flip, none for a hole on the Mirror axis
 - Align Objects: the source of an aligned Gerber and Excellon object parses back to the aligned geometry
+- Film: pad-center punching of a macro pad next to a thin track aperture, and a punch as wide as a pad
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
