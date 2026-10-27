@@ -7,6 +7,7 @@ import ctypes
 from copy import deepcopy
 import os
 import plistlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -293,6 +294,25 @@ class Extensions:
     pdf_list = ['pdf']
     prj_list = ['flatprj']
     conf_list = ['flatconfig']
+
+
+# the start of an Excellon file: the header (M48) or a tool definition such as 'T1C0.8' or 'T01F00S00C0.0300'
+EXCELLON_START_RE = re.compile(r'^[ \t]*(?:M48\b|T\d+(?:[FS][\d.]*)*C[\d.]+)', re.MULTILINE | re.IGNORECASE)
+
+
+def starts_like_excellon(path):
+    """
+    For an extension of both Excellon and G-code files ('tap'): True if the file starts like an Excellon file.
+
+    :param path:    path of the file
+    :return:        True for an Excellon file, and for a file that cannot be read (Excellon was always tried first)
+    """
+    try:
+        with open(path, 'r', errors='replace') as f:
+            head = f.read(8192)
+    except OSError:
+        return True
+    return EXCELLON_START_RE.search(head) is not None
 
 
 class RegisterFK(QtCore.QObject):

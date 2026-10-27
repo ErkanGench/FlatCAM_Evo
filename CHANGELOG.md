@@ -65,12 +65,17 @@ Tcl Shell:
 
 - fixed: adding, deleting, restoring or clearing the autocomplete keywords in Preferences -> Utilities removed the names of the open objects from the auto-completer of the Tcl Shell
 
+Opening files:
+
+- fixed: a .tap G-code file opened by a double-click, from the command line or dropped on the window opened as an Excellon object, and dropped on the plot area it opened twice (as Excellon and as G-code); 'tap' is in the Excellon and in the G-code list, so the start of the file now decides (an M48 header or a tool definition: Excellon)
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - test_file_associations: the first start registers the extension lists of the options; Apply removes only the extensions that point to FlatCAM
 - test_file_associations: no .h / .i in the default and restored G-code lists; the first start leaves the extensions of other programs and runs no duti for the extensions
 - test_rename_completer: editing the autocomplete keywords keeps the object names, also the new name of a renamed object
+- test_startup_args: a .tap file opens as G-code or as Excellon by its content, also dropped on the plot area (once)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
