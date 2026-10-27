@@ -63,6 +63,10 @@ Tcl:
 - fixed: save_sys did not save the project settings changed by set_sys (units, tools_mill_*, ...): it wrote the preferences without the current options; it now saves them, as File -> Save Defaults does
 - fixed: aligndrillgrid gave its tool the text id '1'; a drillcncjob of the grid with toolchange had no tool change block (no T1, M6, M0), only the warning "Preprocessor error, G-code is missing"; the tool now has the id 1, as in every Excellon
 
+Updater:
+
+- fixed: in a frozen (Windows) build, accepting an update or "revert to the previous version" always ended with "The updater could not be started.": the job file had runtime_dir "None" (a frozen build has no runtime copy per job) and FlatCAMUpdater.exe rejected the job before it started; the key is now left out when there is no runtime copy
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
@@ -70,6 +74,7 @@ Tests:
 - new unit test for the laser power of drillcncjob and cncjob without -las_power (tests/test_tcl_laser_power.py)
 - new unit test for the settings that save_sys saves after set_sys (tests/test_tcl_small_commands.py)
 - new unit test for the tool change of a drillcncjob of an aligndrillgrid grid (tests/test_tcl_drillcncjob.py); the aligndrillgrid tool id test of tests/test_excellon_add_tool.py now expects the id 1
+- new unit test that the update and rollback jobs of a frozen build pass the job check of the updater (tests/updater/test_updater_apply.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
