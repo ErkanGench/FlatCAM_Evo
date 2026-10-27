@@ -2896,6 +2896,9 @@ class AppGeoEditor(QtCore.QObject):
             result.data = deepcopy(shape.data)
             if matrix is None:
                 getattr(result, transform)(*args, **kwargs)
+                if np.any(shapely.is_empty(result.geo)):
+                    # an erosion larger than the shape: the empty result was dropped and the shape deleted
+                    raise ValueError(_('The buffer would leave an empty shape.'))
             result.data['bounds'] = result.bounds()
             self._collect_shape(result, transformed)
             if matrix is not None:
@@ -4813,6 +4816,11 @@ class DrawToolShape(object):
             else:
                 if factor:
                     return scale(geom, xfact=value, yfact=value, origin='center')
+                elif geom.geom_type in ('LineString', 'LinearRing') and geom.is_ring:
+                    # the editor keeps a polygon as its outline: buffer the area inside it, as the Buffer tool does,
+                    # and keep the outlines (the buffer of the line was a band with 2 outlines, or empty for erosion)
+                    contours = BufferSelectionTool.buffer_contours(geom, value, quad_segs, join)
+                    return contours[0] if len(contours) == 1 else MultiLineString(contours)
                 else:
                     return geom.buffer(value, quad_segs=quad_segs, join_style=join)
 

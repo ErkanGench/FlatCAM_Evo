@@ -325,9 +325,9 @@ def test_geo_text_apply_clears_the_previous_geometry_on_failure():
     assert tool.app.inform.emit.called
 
 
-def transformation_tool():
+def transformation_tool(geometry=None):
     from appEditors.geo_plugins.GeoTransformationPlugin import TransformEditorTool
-    shape = DrawToolShape(box(2, 3, 6, 9))
+    shape = DrawToolShape(box(2, 3, 6, 9) if geometry is None else geometry)
     editor = editor_with_history([shape], [shape])
     editor.transform_shapes = lambda *a, **kw: AppGeoEditor.transform_shapes(editor, *a, **kw)
     editor.app.decimals, editor.app.app_units = 4, 'MM'
@@ -398,3 +398,20 @@ def test_transform_rotation_is_clockwise_and_mirror_reflects_opposite_coordinate
         getattr(tool, method)(ref=0)
     run_worker(editor)
     assert editor.selected[0].geo.bounds == pytest.approx(expected)
+
+
+def test_transform_buffer_offsets_a_polygon_outline():
+    # the editor loads a polygon as its outline (a closed line): 'Buffer D' moves the outline by the distance
+    for distance, expected in ((1, (1, 2, 7, 10)), (-1, (3, 4, 5, 8))):
+        editor, tool, shape = transformation_tool(box(2, 3, 6, 9).exterior)
+        assert tool.on_buffer_action(distance, 2) is None
+        assert list(editor.storage.get_objects()) == editor.selected
+        assert len(editor.selected) == 1 and editor.selected[0].geo.geom_type == 'LinearRing'
+        assert editor.selected[0].geo.bounds == pytest.approx(expected)
+
+
+def test_transform_buffer_that_erodes_a_shape_away_keeps_it():
+    editor, tool, shape = transformation_tool(box(2, 3, 6, 9).exterior)
+    assert tool.on_buffer_action(-3, 2) == 'fail'
+    assert list(editor.storage.get_objects()) == [shape] and editor.selected == [shape]
+    assert not any('[success]' in c.args[0] for c in editor.app.inform.emit.call_args_list)
