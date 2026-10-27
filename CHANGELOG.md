@@ -63,6 +63,7 @@ Excellon Editor:
 - fixed: Copy in the Array mode with the Circular type showed no preview and made no copies, unless a Linear preview was shown before; the circular preview now needs only the reference point
 - fixed: Copy: a typed length (Projection) and Enter stopped with an error; the copy is now made at that distance from the reference point, towards the cursor, and the editor goes back to Select
 - fixed: Enter with the Move tool stopped with an AttributeError (the key handler read a Move panel that the Excellon editor does not have); Enter now clicks at the cursor, as with the other tools
+- fixed: the 'Add' button of the Copy panel was connected to nothing; it is hidden, the copy is made with the clicks on the canvas
 
 Tests:
 
@@ -72,6 +73,7 @@ Tests:
 - test_exc_editor_defects: Copy as a circular array shows the preview and makes the copies without an earlier Linear preview
 - test_exc_editor_defects: Copy with a typed length and Enter copies at that distance towards the cursor, and warns without a reference point
 - test_exc_editor_defects: Enter with the Move tool moves the selected drill to the cursor
+- test_exc_editor_defects: the Copy panel hides its unconnected 'Add' button
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

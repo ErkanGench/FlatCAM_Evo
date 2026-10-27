@@ -12,6 +12,7 @@ from shapely.geometry import Point
 
 from appEditors.appExcEditor import AppExcEditor, CopyEditorExc, DrillArray, MoveEditorExc, SlotArray
 from appEditors.appGeoEditor import AppGeoEditor, DrawTool
+from appEditors.exc_plugins.ExcCopyPlugin import ExcCopyEditorUI
 from appGUI.MainGUI import MainGUI
 from defaults import AppDefaults
 from test_exc_editor_history import drill, scene
@@ -318,3 +319,16 @@ def test_enter_with_the_move_tool_moves_the_selection_to_the_cursor(monkeypatch)
     drills = [shape for shape in editor.storage_dict[1.0].get_objects() if shape.geo.geom_type == 'MultiLineString']
     assert len(drills) == 1 and drills[0] is not first
     assert (drills[0].geo.centroid.x, drills[0].geo.centroid.y) == pytest.approx((2, 3))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# 15. the Copy panel has no 'Add' button that does nothing
+# ---------------------------------------------------------------------------------------------------------------
+
+def test_copy_panel_hides_its_unconnected_add_button():
+    qapp()
+    panel = QtWidgets.QWidget()
+    app = SimpleNamespace(decimals=4, resource_location='assets/resources', inform=Mock())
+    ui = ExcCopyEditorUI(layout=QtWidgets.QVBoxLayout(panel), copy_class=SimpleNamespace(app=app), plugin_name='Copy')
+    assert not ui.add_button.isVisibleTo(panel)
+    assert ui.clear_btn.isVisibleTo(panel) and ui.mode_radio.isVisibleTo(panel)
