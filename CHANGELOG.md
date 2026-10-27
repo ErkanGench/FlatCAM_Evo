@@ -73,6 +73,10 @@ Preferences:
 
 - fixed: the preferences of an older build (current_defaults_<version>.FlatConfig) were never taken over: the start made an empty current_defaults.FlatConfig before it looked for them, so all the preferences went back to the factory values; an empty file now counts as no file
 
+Bookmarks:
+
+- fixed: Export wrote the bookmarks as '1:[title, link]', so importing the exported file added bookmarks named 1, 2 ... with unusable links; it now writes 'title:link'. Import keeps the spaces of the titles and skips blank lines, which stopped it with an IndexError
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
@@ -81,6 +85,7 @@ Tests:
 - test_rename_completer: editing the autocomplete keywords keeps the object names, also the new name of a renamed object
 - test_startup_args: a .tap file opens as G-code or as Excellon by its content, also dropped on the plot area (once)
 - test_defaults_persistence: the start loads the preferences of an older build over the empty current_defaults.FlatConfig, and not over saved ones
+- test_defaults_audit_regressions: exported bookmarks import as the same bookmarks, also with a blank line
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
