@@ -1893,6 +1893,11 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
     def click(self, point):
+        if not self.makes_arc(point):
+            # the point is not kept: the tool waits for another one
+            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' % _("Choose distinct, non-collinear arc points."))
+            return ""
+
         self.points.append(point)
 
         if len(self.points) == 1:
@@ -1918,6 +1923,25 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
             return "Done."
 
         return ""
+
+    def makes_arc(self, point):
+        """
+        False when no arc goes through the clicked point and the points before it: the second point is the first one
+        again in the '12c' mode (the two ends of the chord) or in the '132' mode (Point1 and Point3), or Point2 of the
+        '132' mode is on the line of Point1 and Point3 (three_point_circle() has no circle for them).
+
+        :param point:   the clicked point (x, y)
+        :return:        bool
+        """
+        if self.mode == 'c12' or not self.points:
+            return True
+        p0 = self.points[0]
+        if len(self.points) == 1:
+            return (point[0], point[1]) != (p0[0], p0[1])
+        if self.mode == '132':
+            p1 = self.points[1]
+            return abs((p1[0] - p0[0]) * (point[1] - p0[1]) - (p1[1] - p0[1]) * (point[0] - p0[0])) > 1e-12
+        return True
 
     def on_key(self, key):
         if key == 'D' or key == QtCore.Qt.Key.Key_D:
