@@ -59,11 +59,13 @@ Circle resolution:
 CNC Job:
 
 - fixed: Edit -> Flip on X / Y axis, Rotate and Skew (also the X and Y keys) on a CNCJob changed the plot but not the saved G-code: Save CNC Code wrote the job as it was before; the saved code now follows the transform, also after Undo / Redo
+- fixed: a CNCJob moved with the Move tool (M key) exported its G-code with the old coordinates; the exported code now has the moved ones, also after Undo / Redo
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - regression tests for the saved G-code of a CNCJob after Edit -> Flip, Rotate and Skew (tests/test_geometry_transforms.py)
+- regression test for the exported G-code of a CNCJob moved with the Move tool (tests/test_move_tool.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
