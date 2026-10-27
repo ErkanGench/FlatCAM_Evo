@@ -234,6 +234,20 @@ class TestExcellonPreferences(unittest.TestCase):
         self.assertEqual({key: field.get_value() for key, field in fields.items()},
                          {key: defaults.factory_defaults[key] for key in fields})    # zeros: 'T'
 
+    def test_units_change_the_export_units_only_when_update_export_is_checked(self):
+        group, app, _defaults = make_group(ExcellonGenPrefGroupUI)
+        self.addCleanup(group.deleteLater)
+        export_units = app.ui.excellon_pref_form.excellon_exp_group.excellon_units_radio
+        group.excellon_units_radio.set_value('INCH')
+        group.update_excellon_cb.set_value(True)
+        group.update_excellon_cb.set_value(False)
+        export_units.reset_mock()
+        group.excellon_units_radio.set_value('METRIC')    # toggles the radio button and emits activated_custom
+        export_units.set_value.assert_not_called()
+        group.update_excellon_cb.set_value(True)
+        group.excellon_units_radio.set_value('INCH')
+        export_units.set_value.assert_called_once_with('INCH')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -440,7 +440,7 @@ class ExcellonGenPrefGroupUI(OptionsGroupUI):
             except TypeError:
                 pass
             try:
-                self.excellon_units_radio.activated_custom.disconnect(self.on_excellon_zeros_changed)
+                self.excellon_units_radio.activated_custom.disconnect(self.on_excellon_units_changed)
             except TypeError:
                 pass
 
@@ -475,7 +475,7 @@ class ExcellonGenPrefGroupUI(OptionsGroupUI):
             except TypeError:
                 pass
             try:
-                self.excellon_units_radio.activated_custom.disconnect(self.on_excellon_zeros_changed)
+                self.excellon_units_radio.activated_custom.disconnect(self.on_excellon_units_changed)
             except TypeError:
                 pass
 
