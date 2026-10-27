@@ -65,6 +65,7 @@ Find Optimal:
 
 - fixed: a click on the empty line after the last entry of 'Gerber distances' (or in the empty box) showed the 'Critical Error' dialog
 - fixed: the search set the 'Determined' and 'Occurring' fields from the worker thread (Qt widgets are not thread-safe: a rare random crash); they are now set in the GUI thread
+- fixed: on a Gerber with a multi-part solid element (for example a shape split in two by Etch Compensation with a negative offset) the search stopped without a message; the NCC Optimal button said "Could not find a safe tool diameter." and an NCC run with Check validity failed. The parts are now measured one by one
 
 PcbWizard Import:
 
@@ -79,6 +80,7 @@ Tests:
 - test_isolation_optimal_tooldia: a click on the empty last line of the Find Optimal distances
 - test_isolation_optimal_tooldia, test_excellon_parser: Find Optimal and the PcbWizard INF loading set their fields in the GUI thread
 - test_excellon_parser: PcbWizard Import uses the format corrected after loading, also on a second Import
+- test_isolation_optimal_tooldia, test_ncc_rest_machining: Find Optimal and the NCC gap check on a Gerber with a MultiPolygon solid
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

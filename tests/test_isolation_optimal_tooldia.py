@@ -20,7 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
-from shapely import box  # noqa: E402
+from shapely import MultiPolygon, box  # noqa: E402
 
 from appMain import App  # noqa: E402
 from defaults import AppDefaults  # noqa: E402
@@ -237,3 +237,13 @@ def test_standalone_optimal_sets_the_result_entries_in_the_gui_thread(qapp):
     assert threads == [threading.main_thread()] * 2
     assert 0 < float(t.ui.result_entry.get_value()) < 0.2
     assert t.ui.freq_entry.get_value() == '1'
+
+
+def test_standalone_optimal_with_a_multi_part_solid(qapp):
+    # a shape split by a negative Etch Compensation is 1 MultiPolygon solid: the search stopped without a message
+    tools = gerber_tools(0.2)
+    tools[10]['geometry'].append({'solid': MultiPolygon([box(0, 5, 1, 6), box(1.15, 5, 2, 6)])})
+    t = standalone_optimal(tools)
+    t.find_minimum_distance()
+    assert (t.ui.result_entry.get_value(), t.ui.freq_entry.get_value()) == ('0.1499', '1')
+    assert any(m.startswith('[success]') for m in messages(t))
