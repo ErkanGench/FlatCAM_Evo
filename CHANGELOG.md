@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Object Distance:
+
+- fixed: after one Shift+M with a wrong selection (not 2 objects), a Reset Tool or a change of the distance type, Shift+M did nothing for the rest of the session
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- test_tool_distance_snap: Object Distance measures again with Shift+M after a wrong selection and after Reset Tool
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
