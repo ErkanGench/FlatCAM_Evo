@@ -60,10 +60,15 @@ Code Editor:
 
 - fixed: Save as PDF read the text as markup: a text with '<' (for example 'a<b' in a Tcl script) gave a Critical Error dialog and no PDF, a '<T1>' comment was left out of the PDF; the text is now escaped, and any other error of the save is shown as a message
 
+Tcl Shell:
+
+- fixed: Find in the right-click menu of the shell output did nothing (only Ctrl+F worked); PageUp / PageDown in the command line and the navigation keys in the output did not scroll the output
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - new unit tests for the PDF save of the code editor (tests/test_object_construction.py)
+- new unit tests for the Find menu and the PageUp / PageDown keys of the shell output (tests/test_headless_console.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
