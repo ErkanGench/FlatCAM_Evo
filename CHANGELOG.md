@@ -33,6 +33,7 @@ Gerber editor:
 - fixed: aperture, feature and Select All table selections now respect the Zoom checkbox
 - fixed: Pad placed nothing (although it showed "Done.") and Pad Array failed with an obround ('O') aperture, as KiCad writes the oval pads; both now place the obround of the aperture, and the aperture table shows and edits the width and height of an 'O' aperture
 - fixed: editing the Dims of a rectangular ('R') aperture grew its tracks (also the clear ones) by the whole new size instead of half of the change: a 1 x 1 track edited to 1.2, 1.2 became 3.4 wide
+- fixed: Mark Area -> Clear, then Mark Area opened again -> Delete deleted the shapes of the cleared marking; Clear and the opening of the tool now forget the marked shapes
 
 Canvas and Jump:
 
@@ -63,6 +64,7 @@ Tests:
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - Gerber editor: Pad and Pad Array place obround pads, and the aperture table shows the dimensions of an 'O' aperture
 - Gerber editor: the Dims edit of an 'R' aperture changes its tracks by half of the change
+- Gerber editor: Mark Area Delete removes only the shapes marked now
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

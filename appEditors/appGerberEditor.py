@@ -2376,8 +2376,9 @@ class MarkEditorGrb(ShapeToolEditorGrb):
     def activate_markarea(self):
         self.draw_app.ui.ma_tool_frame.show()
 
-        # clear previous marking
+        # clear previous marking (the labels and the shapes that Delete would remove)
         self.draw_app.ma_annotation.clear(update=True)
+        self.draw_app.geo_to_delete = []
 
         try:
             self.draw_app.ui.ma_threshold_button.clicked.disconnect()
@@ -2408,6 +2409,8 @@ class MarkEditorGrb(ShapeToolEditorGrb):
 
     def on_markarea_clear(self):
         self.draw_app.ma_annotation.clear(update=True)
+        # the shapes are no longer marked, so a later Delete must not remove them
+        self.draw_app.geo_to_delete = []
         self.deactivate_markarea()
 
     def on_markarea_delete(self):

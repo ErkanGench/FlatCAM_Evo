@@ -2,7 +2,8 @@
 translations and reshapes, import failure recovery, size selection and delete, region operations, aperture table
 edit signal recovery, the marked-polygon list, region-export flag, buffer and scale without a shape, the buffer
 factor check, numeric aperture codes, history depth on error, the zoom switch of update_ui, the Pad and Pad Array
-tools with obround apertures, and the Dims edit of a rectangular aperture with tracks.
+tools with obround apertures, the Dims edit of a rectangular aperture with tracks, and the cleared marks of Mark
+Area.
 
 The editor is the real AppGerberEditor built by test_gerber_editor_pick.make_editor; the application, the canvas and
 the worker are stand-ins. Everything is headless and does not sleep."""
@@ -16,7 +17,8 @@ import pytest
 from PyQt6 import QtCore, QtWidgets
 from shapely.geometry import LineString, Point, Polygon, box
 
-from appEditors.appGerberEditor import AppGerberEditor, ImportEditorGrb, PadArrayEditorGrb, PadEditorGrb, ScaleEditorGrb
+from appEditors.appGerberEditor import (AppGerberEditor, ImportEditorGrb, MarkEditorGrb, PadArrayEditorGrb, PadEditorGrb,
+                                       ScaleEditorGrb)
 from appEditors.grb_plugins.GrbBufferPlugin import BufferEditorTool
 from appEditors.grb_plugins.GrbCommon import DrawToolShape, gerber_steps, numeric_aperture_codes
 from appParsers.ParseGerber import Gerber
@@ -296,3 +298,24 @@ def test_dimension_edit_changes_r_tracks_by_half_the_change():
     assert new_clear.geo['clear'].equals(box(-0.6, 4.4, 10.6, 5.6))
     assert len(editor.history.undo_stack) == 1
 
+
+# 21. Mark Area: the shapes of a cleared marking are not deleted after the tool is opened again
+
+def mark(editor, upper, lower):
+    editor.ui.ma_upper_threshold_entry.set_value(upper)
+    editor.ui.ma_lower_threshold_entry.set_value(lower)
+    tool = MarkEditorGrb(editor)
+    tool.on_markarea_click()
+    return tool
+
+
+def test_mark_area_delete_removes_only_the_shapes_marked_now():
+    editor, small, wide = size_scene()   # areas 6 and 12
+    mark(editor, 13, 0).on_markarea_clear()   # both shapes marked, then Clear
+    MarkEditorGrb(editor).on_markarea_delete()   # the tool opened again, nothing marked: Delete removes nothing
+    assert editor.storage_dict[10]['geometry'] == [small]
+    assert editor.storage_dict['11']['geometry'] == [wide]
+
+    mark(editor, 13, 7).on_markarea_delete()   # only the wide shape is marked
+    assert editor.storage_dict[10]['geometry'] == [small]
+    assert editor.storage_dict['11']['geometry'] == []
