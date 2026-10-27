@@ -1336,7 +1336,8 @@ class TextGroup(object):
         :param value: bool
         """
         self._visible = value
-        if self._index:
+        # 0 is a valid key: the first text group of a collection (each CNCJob has its own collection) has key 0
+        if self._index is not None:
             try:
                 self._collection.data[self._index]['visible'] = value
             except KeyError as e:

@@ -216,5 +216,27 @@ class TestShowPlottedShapes(unittest.TestCase):
         _add_squares(self.obj.shapes, 2)
         self.assertFalse(self.obj.show_plotted_shapes(False))
 
+
+class TestHiddenObjectAnnotation(unittest.TestCase):
+
+    def test_hiding_an_object_hides_the_first_text_group_of_its_collection(self):
+        # TextGroup.visible tested 'if self._index:', so the text group with key 0 (each CNCJob has its own text
+        # collection) kept its texts: the path numbers of a CNCJob that a plugin hides (Levelling hides its source)
+        from appGUI.VisPyVisuals import ShapeGroup, TextCollectionVisual, TextGroup
+        from appObjects.AppObjectTemplate import FlatCAMObj
+        texts = TextCollectionVisual()
+        annotation = TextGroup(texts)
+        annotation.set(text=['1', '2'], pos=[(0, 0), (1, 1)])
+        app = SimpleNamespace(log=Mock(), worker_task=SimpleNamespace(emit=lambda job: job['fcn'](*job['params'])))
+        obj = SimpleNamespace(app=app, shapes=ShapeGroup(_new_collection()), annotation=annotation)
+
+        FlatCAMObj.visible.fset(obj, False)
+        self.assertFalse(texts.data[0]['visible'])
+        self.assertFalse(texts.text)
+        FlatCAMObj.visible.fset(obj, True)
+        self.assertTrue(texts.data[0]['visible'])
+        self.assertEqual(list(texts.text), ['1', '2'])
+
+
 if __name__ == '__main__':
     unittest.main()
