@@ -144,3 +144,21 @@ def test_paint_uses_the_method_of_the_preferences():
         app.options = {'tools_paint_method': preference}
         PaintOptionsTool.set_tool_ui(tool)
         assert tool.ui.paintmethod_combo.get_value() == method
+
+
+def test_paint_lines_method_paints_in_the_editor():
+    # the editor (not a camlib Geometry) is the self of clear_polygon_lines(): a class constant read through self
+    # failed there, nothing was painted and the Paint still said "Done."
+    square = DrawToolShape(box(0, 0, 10, 10).exterior)
+    editor = batch_editor([square], selected=[square])
+    editor.app.abort_flag = False
+    editor.app.options.update({'geometry_circle_steps_mode': 'fixed', 'geometry_circle_steps': 32})
+
+    PaintOptionsTool.paint(SimpleNamespace(fcdraw=editor), 1.0, 0.1, 0.0, connect=False, contour=False,
+                           method='Lines')
+
+    painted = [shape.geo for shape in editor.storage.get_objects() if shape is not square]
+    # the scan lines, 0.5 mm (the tool radius) from the edges and 0.9 mm apart
+    assert len(painted) == 11
+    assert all(box(0.4, 0.4, 9.6, 9.6).contains(line_geo) for line_geo in painted)
+    editor.app.log.error.assert_not_called()

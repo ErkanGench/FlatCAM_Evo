@@ -61,6 +61,7 @@ Geometry editor:
 - fixed: Paint accepted a tool diameter of zero or below; with a negative diameter the Standard method never ended (each pass larger than the last, until Abort), with zero it failed or Seed added only the outline; Paint now refuses it with a message
 - fixed: Paint did not start with the method set in Preferences (Standard gave Seed, Seed and Lines gave Standard); the preference is an index and is now used as one
 - fixed: loading a Geometry into the editor switched the grid snap on and set the tool diameter from the worker thread, and Union, Intersection, Subtract and Cut Path with less than two shapes selected went back to the Select tool from there; these widget changes are now made in the GUI thread (Qt widgets are not thread safe: rare random crashes)
+- fixed: Paint with the Lines method painted nothing and still said "Done." (the scan lines read a constant of camlib Geometry through the editor, which is not a Geometry)
 
 Editors:
 
@@ -75,6 +76,7 @@ Tests:
 - test_geo_editor_history: the editor load and the boolean operations change the widgets in the GUI thread, not in the worker
 - test_app_history_keys: '-' zooms out and '=' zooms in, in the editors as on the main canvas
 - test_app_history_keys: Ctrl+E opens the Gerber editor's Eraser; Ctrl+A selects all in the Gerber and Excellon editors
+- test_geo_editor_performance: the editor's Paint with the Lines method paints the scan lines
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
