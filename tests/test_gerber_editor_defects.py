@@ -1,7 +1,8 @@
 """Regression tests for Gerber Editor defect fixes: Qt slot signatures, the Scale tool connection, history of
 translations and reshapes, import failure recovery, size selection and delete, region operations, aperture table
 edit signal recovery, the marked-polygon list, region-export flag, buffer and scale without a shape, the buffer
-factor check, numeric aperture codes, history depth on error, and the zoom switch of update_ui.
+factor check, numeric aperture codes, history depth on error, the zoom switch of update_ui, and the Pad and Pad Array
+tools with obround apertures.
 
 The editor is the real AppGerberEditor built by test_gerber_editor_pick.make_editor; the application, the canvas and
 the worker are stand-ins. Everything is headless and does not sleep."""
@@ -15,7 +16,7 @@ import pytest
 from PyQt6 import QtCore, QtWidgets
 from shapely.geometry import LineString, Point, Polygon, box
 
-from appEditors.appGerberEditor import AppGerberEditor, ImportEditorGrb, ScaleEditorGrb
+from appEditors.appGerberEditor import AppGerberEditor, ImportEditorGrb, PadArrayEditorGrb, PadEditorGrb, ScaleEditorGrb
 from appEditors.grb_plugins.GrbBufferPlugin import BufferEditorTool
 from appEditors.grb_plugins.GrbCommon import DrawToolShape, gerber_steps, numeric_aperture_codes
 from appParsers.ParseGerber import Gerber
@@ -220,4 +221,54 @@ def test_buffer_factor_at_or_below_zero_is_rejected(factor_value):
 
 
 # 18. update_ui without zoom
+
+
+# 19. Pad and Pad Array with an obround ('O') aperture, as KiCad writes the oval pads
+
+def obround_editor(width, height):
+    meta = {'type': 'O', 'size': math.hypot(width, height), 'width': width, 'height': height}
+    editor = make_editor({12: dict(meta, geometry=[])})
+    editor.gerber_obj = SimpleNamespace(obj_options={'name': 'board'})
+    editor.last_aperture_selected = 12
+    editor.history.reset()
+    return editor, meta
+
+
+def flash_of(editor, meta, x, y):
+    steps = gerber_steps(editor.app, min(meta['width'], meta['height']) / 2)
+    return Gerber.create_flash_geometry(editor, Point(x, y), meta, steps)
+
+
+@pytest.mark.parametrize('width, height', [(1.7, 1.0), (1.0, 1.7)])
+def test_pad_and_pad_array_place_obround_pads(width, height):
+    editor, meta = obround_editor(width, height)
+    tool = PadEditorGrb.__new__(PadEditorGrb)
+    storage = editor.storage_dict[12]['geometry']
+    tool.draw_app, tool.app, tool.storage_obj, tool.points = editor, editor.app, storage, (5.0, 5.0)
+    tool.make()
+    editor.active_tool = tool
+    editor.on_grb_shape_complete(editor.current_storage)
+
+    array = PadArrayEditorGrb.__new__(PadArrayEditorGrb)
+    array.draw_app, array.app, array.storage_obj, array.points = editor, editor.app, storage, [0.0, 0.0]
+    array.ui = MagicMock()
+    array.array_type, array.pad_array_dir, array.pad_array_size, array.pad_pitch = 'linear', 'X', 2, 2.54
+    array.make()
+    editor.active_tool = array
+    editor.on_grb_shape_complete(editor.current_storage)
+
+    shapes = editor.storage_dict[12]['geometry']
+    assert [shape.geo['follow'].coords[0] for shape in shapes] == [(5.0, 5.0), (0.0, 0.0), (2.54, 0.0)]
+    for shape in shapes:
+        x, y = shape.geo['follow'].coords[0]
+        assert shape.geo['solid'].is_valid
+        assert shape.geo['solid'].hausdorff_distance(flash_of(editor, meta, x, y)) < 1e-6
+
+
+def test_aperture_table_shows_editable_obround_dimensions():
+    editor, meta = obround_editor(1.7, 1.0)
+    AppGerberEditor.build_ui(editor)
+    item = editor.ui.apertures_table.item(0, 4)
+    assert [float(value) for value in item.text().split(',')] == [1.7, 1.0]
+    assert item.flags() & QtCore.Qt.ItemFlag.ItemIsEditable
 

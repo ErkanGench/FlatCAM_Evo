@@ -235,67 +235,12 @@ class PadEditorGrb(ShapeToolEditorGrb):
             new_geo_el['solid'] = Polygon([p1, p2, p3, p4, p1])
             new_geo_el['follow'] = center
             return new_geo_el
-        elif ap_type == 'REG':
-            geo = []
-            new_geo_el = {}
-
-            if self.half_height > self.half_width:
-                p1 = (point_x - self.half_width, point_y - self.half_height + self.half_width)
-                p2 = (point_x + self.half_width, point_y - self.half_height + self.half_width)
-                p3 = (point_x + self.half_width, point_y + self.half_height - self.half_width)
-                p4 = (point_x - self.half_width, point_y + self.half_height - self.half_width)
-
-                down_center = [point_x, point_y - self.half_height + self.half_width]
-                d_start_angle = np.pi
-                d_stop_angle = 0.0
-                down_arc = arc(down_center, self.half_width, d_start_angle, d_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_width))
-
-                up_center = [point_x, point_y + self.half_height - self.half_width]
-                u_start_angle = 0.0
-                u_stop_angle = np.pi
-                up_arc = arc(up_center, self.half_width, u_start_angle, u_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_width))
-
-                geo.append(p1)
-                for pt in down_arc:
-                    geo.append(pt)
-                geo.append(p2)
-                geo.append(p3)
-                for pt in up_arc:
-                    geo.append(pt)
-                geo.append(p4)
-                new_geo_el['solid'] = Polygon(geo)
-                center = Point([point_x, point_y])
-                new_geo_el['follow'] = center
-                return new_geo_el
-
-            else:
-                p1 = (point_x - self.half_width + self.half_height, point_y - self.half_height)
-                p2 = (point_x + self.half_width - self.half_height, point_y - self.half_height)
-                p3 = (point_x + self.half_width - self.half_height, point_y + self.half_height)
-                p4 = (point_x - self.half_width + self.half_height, point_y + self.half_height)
-
-                left_center = [point_x - self.half_width + self.half_height, point_y]
-                d_start_angle = np.pi / 2
-                d_stop_angle = 1.5 * np.pi
-                left_arc = arc(left_center, self.half_height, d_start_angle, d_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_height))
-
-                right_center = [point_x + self.half_width - self.half_height, point_y]
-                u_start_angle = 1.5 * np.pi
-                u_stop_angle = np.pi / 2
-                right_arc = arc(right_center, self.half_height, u_start_angle, u_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_height))
-
-                geo.append(p1)
-                geo.append(p2)
-                for pt in right_arc:
-                    geo.append(pt)
-                geo.append(p3)
-                geo.append(p4)
-                for pt in left_arc:
-                    geo.append(pt)
-                new_geo_el['solid'] = Polygon(geo)
-                center = Point([point_x, point_y])
-                new_geo_el['follow'] = center
-                return new_geo_el
+        elif ap_type == 'O':
+            # the same obround as a flash of the Gerber parser
+            center = Point([point_x, point_y])
+            aperture = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]
+            steps = gerber_steps(self.draw_app.app, min(self.half_width, self.half_height))
+            return {'solid': Gerber.create_flash_geometry(self.draw_app, center, aperture, steps), 'follow': center}
         else:
             self.draw_app.app.inform.emit(_(
                 "Incompatible aperture type. Select an aperture with type 'C', 'R' or 'O'."))
@@ -713,68 +658,12 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
             new_geo_el['solid'] = Polygon([p1, p2, p3, p4, p1])
             new_geo_el['follow'] = Point([point_x, point_y])
             return new_geo_el
-        elif ap_type == 'REG':
-            geo = []
-            new_geo_el = {}
-
-            if self.half_height > self.half_width:
-                p1 = (point_x - self.half_width, point_y - self.half_height + self.half_width)
-                p2 = (point_x + self.half_width, point_y - self.half_height + self.half_width)
-                p3 = (point_x + self.half_width, point_y + self.half_height - self.half_width)
-                p4 = (point_x - self.half_width, point_y + self.half_height - self.half_width)
-
-                down_center = [point_x, point_y - self.half_height + self.half_width]
-                d_start_angle = np.pi
-                d_stop_angle = 0.0
-                down_arc = arc(down_center, self.half_width, d_start_angle, d_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_width))
-
-                up_center = [point_x, point_y + self.half_height - self.half_width]
-                u_start_angle = 0.0
-                u_stop_angle = np.pi
-                up_arc = arc(up_center, self.half_width, u_start_angle, u_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_width))
-
-                geo.append(p1)
-                for pt in down_arc:
-                    geo.append(pt)
-                geo.append(p2)
-                geo.append(p3)
-                for pt in up_arc:
-                    geo.append(pt)
-                geo.append(p4)
-
-                new_geo_el['solid'] = Polygon(geo)
-                center = Point([point_x, point_y])
-                new_geo_el['follow'] = center
-                return new_geo_el
-            else:
-                p1 = (point_x - self.half_width + self.half_height, point_y - self.half_height)
-                p2 = (point_x + self.half_width - self.half_height, point_y - self.half_height)
-                p3 = (point_x + self.half_width - self.half_height, point_y + self.half_height)
-                p4 = (point_x - self.half_width + self.half_height, point_y + self.half_height)
-
-                left_center = [point_x - self.half_width + self.half_height, point_y]
-                d_start_angle = np.pi / 2
-                d_stop_angle = 1.5 * np.pi
-                left_arc = arc(left_center, self.half_height, d_start_angle, d_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_height))
-
-                right_center = [point_x + self.half_width - self.half_height, point_y]
-                u_start_angle = 1.5 * np.pi
-                u_stop_angle = np.pi / 2
-                right_arc = arc(right_center, self.half_height, u_start_angle, u_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_height))
-
-                geo.append(p1)
-                geo.append(p2)
-                for pt in right_arc:
-                    geo.append(pt)
-                geo.append(p3)
-                geo.append(p4)
-                for pt in left_arc:
-                    geo.append(pt)
-
-                new_geo_el['solid'] = Polygon(geo)
-                center = Point([point_x, point_y])
-                new_geo_el['follow'] = center
-                return new_geo_el
+        elif ap_type == 'O':
+            # the same obround as a flash of the Gerber parser
+            center = Point([point_x, point_y])
+            aperture = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]
+            steps = gerber_steps(self.draw_app.app, min(self.half_width, self.half_height))
+            return {'solid': Gerber.create_flash_geometry(self.draw_app, center, aperture, steps), 'follow': center}
         else:
             self.draw_app.app.inform.emit(_(
                 "Incompatible aperture type. Select an aperture with type 'C', 'R' or 'O'."))
@@ -4350,7 +4239,7 @@ class AppGerberEditor(QtCore.QObject):
             ap_type_item = QtWidgets.QTableWidgetItem(str(self.storage_dict[ap_code]['type']))
             ap_type_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
 
-            if str(self.storage_dict[ap_code]['type']) == 'R' or str(self.storage_dict[ap_code]['type']) == '0':
+            if str(self.storage_dict[ap_code]['type']) in ('R', 'O'):
                 ap_dim_item = QtWidgets.QTableWidgetItem(
                     '%.*f, %.*f' % (self.decimals, self.storage_dict[ap_code]['width'],
                                     self.decimals, self.storage_dict[ap_code]['height']

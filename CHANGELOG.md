@@ -31,6 +31,7 @@ Gerber editor:
 - Track: hold Space for a grid ten times finer while routing; releasing Space restores the normal grid and refreshes the live preview
 - rectangular and obround apertures now have separate Width and Height fields; both dimensions must be finite and positive
 - fixed: aperture, feature and Select All table selections now respect the Zoom checkbox
+- fixed: Pad placed nothing (although it showed "Done.") and Pad Array failed with an obround ('O') aperture, as KiCad writes the oval pads; both now place the obround of the aperture, and the aperture table shows and edits the width and height of an 'O' aperture
 
 Canvas and Jump:
 
@@ -59,6 +60,7 @@ Circle resolution:
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- Gerber editor: Pad and Pad Array place obround pads, and the aperture table shows the dimensions of an 'O' aperture
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
