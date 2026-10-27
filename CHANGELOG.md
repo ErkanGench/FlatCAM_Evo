@@ -59,11 +59,13 @@ Circle resolution:
 Tcl:
 
 - fixed: a Tcl command that made an object with a name already in use (a script run again in the same session) gave the new object another name (name_1) without a message, and the next commands that use the name took the old object, so write_gcode could write the G-code of the first run; the command now warns and gives the name of the new object
+- fixed: with a laser preprocessor and neither -las_power nor -spindlespeed, drillcncjob and cncjob of a single-geometry object made the job at the power 0 (M3 S0, nothing burns); they now use the laser power of each tool or of the object, as the Drilling and Milling plugins and cncjob of a multi-geometry object do
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - new unit test for the warning of a Tcl command whose new object was renamed because its name was in use (tests/test_tcl_audit_regressions.py)
+- new unit test for the laser power of drillcncjob and cncjob without -las_power (tests/test_tcl_laser_power.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
