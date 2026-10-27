@@ -745,6 +745,11 @@ class AppGCodeEditor(QtCore.QObject):
         """
         my_gcode = self.ui.gcode_editor_tab.code_editor.toPlainText()
         self.gcode_obj.source_file = my_gcode
+
+        # the name in the Name field (also when Enter was not pressed); no history step of its own, the Edit step of
+        # the save has the name too
+        self.edited_obj_name = self.ui.name_entry.get_value()
+        self.app.collection.rename_object(self.gcode_obj, self.edited_obj_name)
         self.deactivate()
 
         self.ui.gcode_editor_tab.buttonSave.setStyleSheet("")

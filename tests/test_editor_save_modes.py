@@ -371,3 +371,37 @@ def test_closed_code_review_tab_is_deleted_but_not_the_tab_of_an_editor_still_op
     assert not deleted(editor_page) and not deleted(plot_page)
 
 
+def test_gcode_editor_save_renames_the_job_with_the_typed_name():
+    # the G-code Editor shows a Name field, but the typed name was only stored (on Enter) and never used: the CNC
+    # job kept its old name
+    from types import MethodType
+    from PyQt6 import QtWidgets
+    from appEditors.appGCodeEditor import AppGCodeEditor
+    from appGUI.GUIElements import FCEntry
+    from appObjects.ObjectCollection import ObjectCollection
+
+    editor = AppGCodeEditor.__new__(AppGCodeEditor)
+    editor.app = MagicMock(resource_location='')
+    # the rename of the Project tree, without a history step: the Edit step of the save has the name
+    editor.app.collection.rename_object = MethodType(ObjectCollection.rename_object,
+                                                     SimpleNamespace(app=editor.app, update_view=Mock()))
+    job = SimpleNamespace(obj_options={'name': 'job'}, source_file='G0 X0')
+    editor.gcode_obj = job
+    editor.ui = SimpleNamespace(name_entry=FCEntry(), gcode_editor_tab=SimpleNamespace(
+        code_editor=QtWidgets.QPlainTextEdit('G0 X1'), buttonSave=Mock()))
+
+    # typed, Enter not pressed
+    editor.ui.name_entry.set_value('job_edited')
+    editor.update_fcgcode(job)
+    assert job.source_file == 'G0 X1'
+    assert job.obj_options['name'] == 'job_edited'
+    editor.app.object_status_changed.emit.assert_called_once_with(job, 'rename', 'job')
+
+    # an empty field or the same name: the name stays
+    for text in ('', 'job_edited'):
+        editor.ui.name_entry.set_value(text)
+        editor.update_fcgcode(job)
+        assert job.obj_options['name'] == 'job_edited'
+    editor.app.object_status_changed.emit.assert_called_once()
+
+
