@@ -127,7 +127,9 @@ class CircleEditorTool(AppToolEditor):
             circle_geo = Point((origin_x, origin_y)).buffer(1)
             geo = scale(circle_geo, radius_x, radius_y)
             if angle != 0:
-                geo = rotate(geo, -angle)
+                # counter-clockwise, as the preview and the Enter path of the Circle tool, which write this field
+                # (-angle made the mirror image of a drawn ellipse on Apply)
+                geo = rotate(geo, angle)
 
         added_shapes = []
         self.draw_app._collect_shape(geo.exterior, added_shapes)

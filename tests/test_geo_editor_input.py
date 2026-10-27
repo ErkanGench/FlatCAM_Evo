@@ -441,3 +441,13 @@ def test_circle_panel_adds_a_circle_with_the_y_radius_field_left_at_0():
     added = panel_add(CircleEditorTool, radius_x_entry=5, **circle)
     assert len(added) == 1 and added[0].bounds == pytest.approx((5, 5, 15, 15))
     assert panel_add(CircleEditorTool, radius_x_entry=0, **circle) == []
+
+
+def test_circle_panel_rotates_an_ellipse_like_the_circle_tool():
+    from shapely import Point
+    from shapely.affinity import rotate, scale
+    added = panel_add(CircleEditorTool, linked=False, x_entry=0, y_entry=0, radius_x_entry=4, radius_y_entry=1,
+                      angle_entry=30)
+    # the preview and the Enter path of FCCircle, which write the angle field, rotate by +angle (counter-clockwise)
+    expected = rotate(scale(Point(0, 0).buffer(1), 4, 1), 30)
+    assert len(added) == 1 and Polygon(added[0]).symmetric_difference(expected).area < 1e-9
