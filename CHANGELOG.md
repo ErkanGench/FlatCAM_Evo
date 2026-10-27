@@ -60,12 +60,14 @@ G-code Editor:
 
 - fixed: each session of the G-code Editor and each Code Review of a CNC job kept its closed tab, with a whole copy of the G-code, in memory until the app was closed (a 9 MB G-code: about 85 MB more for each session); the closed tab is now deleted
 - fixed: a name typed in the Name field of the G-code Editor was ignored and the CNC job kept its old name; Save now renames the job (with or without Enter in the field), in the same Edit step of the history as the G-code
+- fixed: Go to Line (Ctrl+G) in the code editors (G-code Editor, Source Editor, Code Review) counted each wrapped part of a long line as a line, so it stopped above the wanted line (in a narrow editor with long comments, line 500 gave line 417); a text that is not a line number went to line 1 without a message; it now goes to the line with that number in the number bar, and a wrong or out of range entry only shows a warning
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - new unit tests for the closed tabs of the G-code Editor and the Code Review (tests/test_editor_save_modes.py)
 - new unit test for the name typed in the G-code Editor (tests/test_editor_save_modes.py)
+- new unit tests for Go to Line in a code editor with wrapped lines (tests/test_lazy_highlight.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
