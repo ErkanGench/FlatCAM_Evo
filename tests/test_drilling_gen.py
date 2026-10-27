@@ -6,6 +6,8 @@ Run from the repository root:
 """
 import importlib
 import re
+import sys
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -476,6 +478,49 @@ def test_a_peck_deeper_than_the_cut_drills_the_hole_in_one_move():
     __, __, (gcode, __, __) = gui_run([(5.0, 5.0)], **dict(PECK, tools_drill_peck_depth=5.0))
     assert z_moves(gcode)[:2] == ['G01 Z-3.0000', 'G00 Z2.0000']
     assert 'G00 Z-0.7000' not in gcode
+
+
+@contextmanager
+def endless_loop_guard(limit=20000):
+    """An error after `limit` lines in calculate_depths(): a loop that never ends fails quickly, without the memory."""
+    count = [0]
+
+    def lines(frame, event, arg):
+        count[0] += event == 'line'
+        if count[0] > limit:
+            raise RuntimeError('calculate_depths() does not end')
+        return lines
+
+    old = sys.gettrace()
+    sys.settrace(lambda frame, event, arg: lines if frame.f_code.co_name == 'calculate_depths' else None)
+    try:
+        yield
+    finally:
+        sys.settrace(old)
+
+
+def plunges(gcode):
+    return [line for line in gcode.splitlines() if line.startswith('G01 Z-')]
+
+
+def test_multidepth_with_a_zero_depth_per_pass_drills_in_one_pass():
+    # before, the depths of a hole were never done and filled the memory (also Tcl drillcncjob -dpp 0)
+    holes = [(1.0, 1.0), (5.0, 1.0), (5.0, 5.0)]
+    with endless_loop_guard():
+        __, __, (gcode, __, __) = gui_run(holes, tools_drill_cutz=-1.5, tools_drill_multidepth=True,
+                                          tools_drill_depthperpass=0.0)
+        __, __, __, tcl_code = tcl_run({1: (0.8, holes, ())}, args={'drillz': -1.5, 'dpp': 0.0},
+                                       options=dict(tools_drill_toolchange=False))
+    assert plunges(gcode) == ['G01 Z-1.5000'] * 3
+    assert plunges(tcl_code) == ['G01 Z-1.5000'] * 3
+
+
+def test_multidepth_with_a_negative_depth_per_pass_uses_it_as_positive():
+    data = dict(tools_drill_cutz=-1.5, tools_drill_multidepth=True)
+    with endless_loop_guard():
+        __, __, (gcode, __, __) = gui_run([(1.0, 1.0)], tools_drill_depthperpass=-0.5, **data)
+    assert plunges(gcode) == ['G01 Z-0.5000', 'G01 Z-1.0000', 'G01 Z-1.5000']
+    assert gcode == gui_run([(1.0, 1.0)], tools_drill_depthperpass=0.5, **data)[2][0]
 
 
 def test_dwell_at_the_bottom_is_done_once_at_the_final_depth_of_every_hole():

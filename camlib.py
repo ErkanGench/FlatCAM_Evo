@@ -3608,7 +3608,13 @@ class CNCjob(Geometry):
                                   str(self.laser_min_power)))
 
     def calculate_depths(self, step):
-        if self.multidepth and abs(self.z_cut) > abs(self.z_depthpercut):
+        # the step is a depth: a negative one is used as positive; a zero step would never reach the Cut Z, so it is
+        # drilled in one pass, as the milling does
+        try:
+            step = abs(float(step))
+        except (TypeError, ValueError):
+            step = 0.0
+        if self.multidepth and step > 0 and abs(self.z_cut) > step:
             if self.z_cut > 0:
                 top = deepcopy(self.z_cut)
                 bottom = 0
