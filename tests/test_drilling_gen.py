@@ -400,6 +400,43 @@ def test_plugin_refuses_drill_points_inside_a_drilling_exclusion_area(fc, plugin
     assert any('Drill points inside the exclusion zones' in m for m in msgs)
 
 
+GOOD_Z = dict(tools_drill_travelz=2.0, tools_drill_feedrate_z=300.0)
+
+
+def test_plugin_refuses_a_travel_z_or_a_feedrate_z_that_is_not_above_zero(fc, plugin, monkeypatch):
+    # a Travel Z of zero or below makes the moves between the holes with the bit in the board; F0 is no feed
+    for name, data, value in (('gen_k1', dict(tools_drill_travelz=-2.0), 'Travel Z'),
+                              ('gen_k2', dict(tools_drill_travelz=0.0), 'Travel Z'),
+                              ('gen_k3', dict(tools_drill_feedrate_z=0.0), 'Feedrate Z')):
+        open_plugin(fc, plugin, name, selected=[1], tools_drill_toolchange=False, **dict(GOOD_Z, **data))
+        job, msgs = generate(fc, plugin, monkeypatch)
+        assert job is None
+        assert any(m.startswith('[ERROR_NOTCL]') and value in m and m.endswith('(tool 1)') for m in msgs)
+    # with a toolchange every tool uses its own data: the error names the tool
+    open_plugin(fc, plugin, 'gen_k4', selected=[1, 2, 3], tools_drill_toolchange=True, **GOOD_Z)
+    plugin.excellon_tools[3]['data']['tools_drill_travelz'] = -1.0
+    job, msgs = generate(fc, plugin, monkeypatch)
+    assert job is None
+    assert [m.endswith('(tool 3)') for m in msgs if m.startswith('[ERROR_NOTCL]')] == [True]
+
+
+def test_plugin_job_check_leaves_out_the_data_the_job_does_not_use(fc, plugin, monkeypatch):
+    # without a toolchange the data of the first tool drill all the holes: the Travel Z of tool 3 is not used
+    open_plugin(fc, plugin, 'gen_k5', selected=[1, 3], tools_drill_toolchange=False, **GOOD_Z)
+    plugin.excellon_tools[3]['data']['tools_drill_travelz'] = -1.0
+    job, __ = generate(fc, plugin, monkeypatch)
+    assert job is not None and 'G00 Z2.0000' in job.gcode and 'G00 Z-1.0000' not in job.gcode
+    # for a laser the Travel Z is the focus height and there is no Z feed
+    open_plugin(fc, plugin, 'gen_k6', selected=[1], tools_drill_toolchange=False, tools_drill_travelz=0.0,
+                tools_drill_feedrate_z=0.0)
+    plugin.ui.pp_excellon_name_cb.set_value('GRBL_laser')
+    try:
+        job, __ = generate(fc, plugin, monkeypatch)
+    finally:
+        plugin.ui.pp_excellon_name_cb.set_value('default')
+    assert job is not None
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # peck drilling, dwell at the bottom, spindle direction
 # ---------------------------------------------------------------------------------------------------------------------

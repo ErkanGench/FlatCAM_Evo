@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Drilling:
+
+- fixed: a Travel Z of zero or below made every move between the holes with the bit in or on the material, and a Feedrate Z of zero wrote "G01 F0"; the job is now refused with an error that names the tool (not for the laser preprocessors)
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- test_drilling_gen: the Drilling job is refused for a Travel Z of zero or below and for a Feedrate Z of zero
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
