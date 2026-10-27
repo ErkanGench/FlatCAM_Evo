@@ -905,12 +905,12 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
         elif mod_key is None:
             # Toggle Drill Array Direction
             if key == QtCore.Qt.Key.Key_Space:
-                if self.ui.pad_dir_radio.get_value() == 'X':
-                    self.ui.pad_dir_radio.set_value('Y')
-                elif self.ui.pad_axis_radio.get_value() == 'Y':
-                    self.ui.pad_axis_radio.set_value('A')
-                elif self.ui.pad_axis_radio.get_value() == 'A':
-                    self.ui.pad_axis_radio.set_value('X')
+                if self.ui.axis_radio.get_value() == 'X':
+                    self.ui.axis_radio.set_value('Y')
+                elif self.ui.axis_radio.get_value() == 'Y':
+                    self.ui.axis_radio.set_value('A')
+                elif self.ui.axis_radio.get_value() == 'A':
+                    self.ui.axis_radio.set_value('X')
 
                 # ## Utility geometry (animated)
                 self.draw_app.update_utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
