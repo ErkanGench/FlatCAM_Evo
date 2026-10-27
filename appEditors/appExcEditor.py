@@ -866,7 +866,16 @@ class DrillArray(FCShapeTool):
     @excellon_operation(_('Drill array'))
     def add_drill_array(self, array_pos):
         self.drill_radius = self.ui.radius_entry.get_value()
+
+        # the values in the panel now: utility_geometry() read them at the last mouse move over the canvas
+        self.drill_axis = self.ui.axis_radio.get_value()
+        self.drill_direction = self.ui.array_dir_radio.get_value()
         self.drill_array = self.ui.array_type_radio.get_value()
+
+        self.drill_array_size = int(self.ui.array_size_entry.get_value())
+        self.drill_pitch = float(self.ui.pitch_entry.get_value())
+        self.drill_linear_angle = float(self.ui.linear_angle_entry.get_value())
+        self.drill_angle = float(self.ui.circular_angle_entry.get_value())
 
         curr_pos = self.draw_app.snap(array_pos[0], array_pos[1])
         self.draw_app.snap_x = curr_pos[0]

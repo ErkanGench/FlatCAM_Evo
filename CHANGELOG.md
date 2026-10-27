@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Excellon Editor:
+
+- fixed: the 'Add' button of Drill Array used the size, pitch, direction and angles of the last mouse move over the canvas, not the values in the panel; it now reads the panel, like Slot Array
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- test_exc_editor_defects: the 'Add' button of Drill Array uses the values changed in the panel after the last mouse move
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

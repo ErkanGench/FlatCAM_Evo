@@ -10,8 +10,8 @@ from PyQt6 import QtWidgets
 from shapely.affinity import translate
 from shapely.geometry import Point
 
-from appEditors.appExcEditor import AppExcEditor
-from appEditors.appGeoEditor import AppGeoEditor
+from appEditors.appExcEditor import AppExcEditor, DrillArray
+from appEditors.appGeoEditor import AppGeoEditor, DrawTool
 from defaults import AppDefaults
 from test_exc_editor_history import drill, scene
 from tests.helpers_objects import _headless_qt  # noqa: F401,E402
@@ -160,5 +160,60 @@ def test_history_rollback_refreshes_when_only_selection_changed():
 # ---------------------------------------------------------------------------------------------------------------
 # 9. translated display and units-aware diagnostics tolerance
 # ---------------------------------------------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# 10. the 'Add' button of the Drill Array panel uses the values of the panel
+# ---------------------------------------------------------------------------------------------------------------
+
+class Entry:
+    """A panel field or radio set of the stand-in panels: get_value() / set_value()."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def get_value(self):
+        return self.value
+
+    def set_value(self, value):
+        self.value = value
+
+
+DRILL_ARRAY_PANEL = dict(array_type_radio='linear', array_size_entry=5, axis_radio='X', pitch_entry=2.54,
+                         linear_angle_entry=0.0, array_dir_radio='CW', circular_angle_entry=30.0, radius_entry=0.0)
+
+
+def array_tool(cls, panel):
+    """An array tool (made without its plugin panel) on the scene() editor; the panel holds the given values."""
+    editor, _first, _second = scene()
+    bind(editor, 'on_exc_shape_complete', 'delete_utility_geometry', 'on_shape_complete', 'add_shape')
+    editor.snap = lambda x, y: (x, y)
+    editor.snap_x = editor.snap_y = 0.0
+    tool = cls.__new__(cls)
+    DrawTool.__init__(tool, editor)
+    tool.app, tool.selected_dia, tool.cursor_data_control = editor.app, 1.0, True
+    tool.origin = tool.destination = tool.flag_for_circ_array = None
+    tool.last_dx = tool.last_dy = 0
+    tool.pt = []
+    tool.ui = SimpleNamespace(**{name: Entry(value) for name, value in panel.items()})
+    editor.active_tool = tool
+    return editor, tool
+
+
+def added_centers(editor):
+    """The x, y of the center of each feature added after the 2 features of the scene() editor, in 1 flat list."""
+    return [value for shape in list(editor.storage_dict[1.0].get_objects())[2:]
+            for value in (shape.geo.centroid.x, shape.geo.centroid.y)]
+
+
+def test_drill_array_add_button_uses_the_panel_values_changed_after_the_last_mouse_move():
+    editor, tool = array_tool(DrillArray, DRILL_ARRAY_PANEL)
+    tool.utility_geometry(data=(0.0, 0.0))  # the mouse goes over the canvas: 5 drills, 2.54 along X
+    tool.ui.array_size_entry.set_value(3)
+    tool.ui.pitch_entry.set_value(1.27)
+    tool.ui.axis_radio.set_value('Y')
+    tool.add_drill_array((10.0, 20.0))
+    assert added_centers(editor) == pytest.approx([10, 20, 10, 21.27, 10, 22.54])
+    assert len(editor.points_edit[1.0]) == 1 + 3
 
 
