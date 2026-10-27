@@ -185,6 +185,29 @@ def test_plunge_to_travel_z_after_the_toolchange():
     assert with_plunge.count('G00 Z2.0000') == without.count('G00 Z2.0000') + 1
 
 
+TOOLCHANGE_Z_RE = re.compile(r'^M5\nG00 Z(\S+)\nT\d+$', re.M)
+
+
+def start_z_moves(code):
+    """The Z moves of the G-code before the first travel."""
+    return re.findall(r'^G00 Z(\S+)$', code.split('\nG00 X', 1)[0], re.M)
+
+
+def test_without_startz_the_first_toolchange_and_travel_are_at_the_heights_of_the_job():
+    # no -startz and no Start Z in the Preferences: no start Z move, as in the Drilling plugin. The Travel Z of the
+    # Preferences (2.0) was the Start Z: the T1 toolchange and the first travel were 2 mm above the material
+    code = run(TWO, ['-toolchange', 1, '-toolchangez', 30, '-travelz', 10])[2]
+    assert TOOLCHANGE_Z_RE.findall(code) == ['30.0000', '30.0000']
+    assert start_z_moves(run(TWO, ['-toolchange', 0, '-travelz', 10])[2]) == ['10.0000']
+
+
+def test_the_startz_argument_or_preference_is_still_the_start_height():
+    code = run(TWO, ['-toolchange', 1, '-toolchangez', 30, '-startz', 5])[2]
+    assert TOOLCHANGE_Z_RE.findall(code) == ['5.0000', '30.0000']
+    code = run(TWO, ['-toolchange', 0, '-travelz', 10], options=dict(tools_drill_startz=3.0))[2]
+    assert start_z_moves(code) == ['10.0000', '3.0000']
+
+
 def test_retract_option_decides_the_up_to_zero_move():
     tools = {1: (0.8, [(1.0, 1.0)], (), {})}
     assert 'G01 Z0' in run(tools, ['-f_retract', 0])[2].splitlines()

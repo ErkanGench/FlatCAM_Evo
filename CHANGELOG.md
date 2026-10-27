@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Tcl:
+
+- fixed: drillcncjob without -startz (and without a Start Z in the Preferences) used the Travel Z of the Preferences as the Start Z, so the first tool change was made at that height instead of -toolchangez and, without toolchange, the first travel was made at it instead of -travelz; there is now no start Z move, as in the Drilling plugin
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- new unit tests for the heights of the first tool change and the first travel of drillcncjob without -startz (tests/test_tcl_drillcncjob.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
