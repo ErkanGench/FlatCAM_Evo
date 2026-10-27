@@ -674,7 +674,10 @@ class DrillArray(FCShapeTool):
                 radius = 0
             if radius == 0:
                 self.draw_app.delete_utility_geometry()
-            self.ui.radius_entry.set_value(radius)
+            # no radius to show before the center is clicked: a mouse move over the canvas must not set the
+            # radius typed for the 'Add' button to 0
+            if self.origin is not None:
+                self.ui.radius_entry.set_value(radius)
 
             if len(self.pt) >= 1 and radius > 0:
                 try:
@@ -1489,7 +1492,10 @@ class SlotArray(FCShapeTool):
                 radius = 0
             if radius == 0:
                 self.draw_app.delete_utility_geometry()
-            self.ui.radius_entry.set_value(radius)
+            # no radius to show before the center is clicked: a mouse move over the canvas must not set the
+            # radius typed for the 'Add' button to 0
+            if self.origin is not None:
+                self.ui.radius_entry.set_value(radius)
 
             if len(self.pt) >= 1 and radius > 0:
                 try:

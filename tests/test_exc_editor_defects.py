@@ -10,7 +10,7 @@ from PyQt6 import QtWidgets
 from shapely.affinity import translate
 from shapely.geometry import Point
 
-from appEditors.appExcEditor import AppExcEditor, DrillArray
+from appEditors.appExcEditor import AppExcEditor, DrillArray, SlotArray
 from appEditors.appGeoEditor import AppGeoEditor, DrawTool
 from defaults import AppDefaults
 from test_exc_editor_history import drill, scene
@@ -217,3 +217,28 @@ def test_drill_array_add_button_uses_the_panel_values_changed_after_the_last_mou
     assert len(editor.points_edit[1.0]) == 1 + 3
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# 11. a mouse move before the center click keeps the radius typed for a circular array
+# ---------------------------------------------------------------------------------------------------------------
+
+SLOT_ARRAY_PANEL = dict(array_type_radio='linear', array_size_entry=5, array_axis_radio='X', array_pitch_entry=2.54,
+                        array_linear_angle_entry=0.0, array_direction_radio='CW', array_angle_entry=30.0,
+                        radius_entry=0.0, slot_length_entry=2.0, slot_direction_radio='X', slot_angle_entry=0.0)
+
+
+@pytest.mark.parametrize('cls', [DrillArray, SlotArray])
+def test_circular_array_add_button_keeps_the_typed_radius_after_a_mouse_move(cls):
+    if cls is DrillArray:
+        panel = dict(DRILL_ARRAY_PANEL, array_dir_radio='CCW', circular_angle_entry=90.0)
+    else:
+        panel = dict(SLOT_ARRAY_PANEL, array_direction_radio='CCW', array_angle_entry=90.0)
+    panel.update(array_type_radio='circular', array_size_entry=4, radius_entry=5.0)
+    editor, tool = array_tool(cls, panel)
+    tool.utility_geometry(data=(3.0, 4.0))  # the mouse goes over the canvas before a center is clicked
+    assert tool.ui.radius_entry.get_value() == 5.0
+    (tool.add_drill_array if cls is DrillArray else tool.add_slot_array)((10.0, 20.0))
+    assert added_centers(editor) == pytest.approx([15, 20, 10, 25, 5, 20, 10, 15])
+    # after a center click the mouse move still shows the radius
+    tool.set_origin((0.0, 0.0))
+    tool.utility_geometry(data=(6.0, 8.0))
+    assert tool.ui.radius_entry.get_value() == pytest.approx(10.0)
