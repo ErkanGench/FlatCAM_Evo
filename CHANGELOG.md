@@ -65,6 +65,7 @@ Preferences:
 - fixed: an alpha of 1 to 15 on an alpha slider (Gerber, Excellon, CNC Job travel and selection colours) gave a 7-digit colour that the canvas rejects, so for example a CNC job was not drawn and no message was shown; also, Save or Apply put the old alpha back; the alpha has now always 2 digits and the slider also sets the colour fields that Save stores
 - fixed: the Restore Defaults button of Preferences -> Excellon -> General set the zeros to LZ, while the factory value is TZ; after a Save, the Excellon files with no zeros information in the header and no decimal point (old Eagle files) were read with wrong coordinates, for example 1.25 in as 12.5 in, and drilled at wrong positions; the button now sets the factory values
 - fixed: with "Update Export settings" unchecked (Preferences -> Excellon -> General), a change of the Excellon units still changed the units and the format of the Excellon export; each new check of the box also connected the update once more; the box now stops the update of the units too
+- fixed: File -> Export Preferences failed with an error and wrote no file (the project options have no write()); it now writes the preferences in effect, the same content as the preferences file; edits in the Preferences tab that are not saved are not exported
 
 Tests:
 
@@ -76,6 +77,7 @@ Tests:
 - test_preferences_project_keys: the alpha sliders give a valid colour that Save keeps
 - test_preferences_project_keys: the Excellon Restore Defaults button sets the factory format and zeros
 - test_preferences_project_keys: the Excellon units change the export units only when "Update Export settings" is checked
+- test_defaults_persistence: File -> Export Preferences writes the preferences in effect
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
