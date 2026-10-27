@@ -2060,8 +2060,18 @@ class App(QtCore.QObject):
 
         if init_tcl:
             # Tcl "Shell" tool has to be initialized always first because other tools print messages in the Shell Dock
+            old_shell = self.shell
             self.shell = FCShell(app=self, version=self.version)
             self.log.debug("TCL was re-instantiated. TCL variables are reset.")
+            if old_shell is not None:
+                # the dock only hides the replaced shell: delete it, and free its Tcl interpreter here, in the GUI
+                # thread
+                old_shell.tcl = None
+                old_shell.deleteLater()
+            if self.regFK is not None:
+                # the auto-completer keywords (Tcl commands, object names) go to the new shell
+                self.regFK.shell = self.shell
+                self.regFK.register_keywords()
 
         self.distance_tool = Distance(self)
         self.distance_tool.install(icon=QtGui.QIcon(self.resource_location + '/distance16.png'), pos=self.ui.menuedit,

@@ -60,12 +60,14 @@ Application:
 
 - fixed: Set Origin stayed armed until the replot ended, so a second click (or a double click) moved all the objects again, possibly at the same time in another worker; 1 click now sets the origin 1 time
 - fixed: a rename (Project tree, the name field in Properties, the G-code export that names the CNC job after the file) could give an object the name of another object; the Objects menu, Tcl and the plugin lists then used the first object of that name; the name now gets a number as for a new object (top_1), and an empty name is not used
+- fixed: each project opened in the GUI made a new Tcl Shell and kept the old one hidden in memory with its Tcl interpreter and its text; the auto-completer kept updating the first, hidden shell, so the visible shell completed no object names or Tcl commands; the old shell is now deleted and the new one gets the keywords
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - added a regression check that a double click on Set Origin moves the objects once
 - added regression checks that a rename gives the name of another object a number
+- added a regression check that a Tcl reset deletes the old shell and gives the new one the auto-completer keywords
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

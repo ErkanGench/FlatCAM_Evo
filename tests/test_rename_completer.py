@@ -98,5 +98,45 @@ class TestRenameKeepsNamesUnique(unittest.TestCase):
         self.assertEqual((other.obj_options["name"], renamed.obj_options["name"]), ("top", "top_1"))
 
 
+class TestTclReset(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PyQt6 import QtWidgets
+        cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_tcl_reset_deletes_the_old_shell_and_gives_the_new_one_the_keywords(self):
+        from PyQt6 import QtWidgets, sip
+        from appMain import App
+        dock = QtWidgets.QDockWidget()
+
+        class Shell(QtWidgets.QWidget):
+            def __init__(self, app=None, version=None):
+                super().__init__()
+                self.tcl = object()
+                self.line = mock.MagicMock()
+                dock.setWidget(self)    # as FCShell does
+
+            def command_line(self):
+                return self.line
+
+        class StopAfterShell(Exception):
+            pass
+
+        old = Shell()
+        reg, _ = make_reg(["drill.drl", "cncjob"])
+        reg.shell = old
+        app = SimpleNamespace(shell=old, regFK=reg, version="1.0", log=mock.MagicMock(), inform=mock.MagicMock())
+        # Open Project in the GUI (on_file_new_project(reset_tcl=True)); the plugins come after the shell
+        with mock.patch("appMain.FCShell", Shell), mock.patch("appMain.Distance", side_effect=StopAfterShell):
+            with self.assertRaises(StopAfterShell):
+                App.install_tools(app, init_tcl=True)
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        self.assertTrue(sip.isdeleted(old))
+        self.assertEqual([child for child in dock.findChildren(QtWidgets.QWidget) if isinstance(child, Shell)],
+                         [app.shell])
+        self.assertIs(reg.shell, app.shell)
+        app.shell.line.set_model_data.assert_called_with(["drill.drl", "cncjob"])
+
+
 if __name__ == "__main__":
     unittest.main()
