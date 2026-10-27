@@ -344,3 +344,13 @@ def test_object_distance_shift_m_works_after_a_wrong_selection_and_a_reset(objec
     # Reset Tool flagged it as running too
     object_distance.ui.reset_button.click()
     assert object_distance_shift_m(object_distance, first, third) == pytest.approx(2)
+
+
+def test_object_distance_measure_button_shows_zero_for_touching_objects(object_distance):
+    first, second, overlapping = flash((0, 0)), flash((0, 5)), flash((1.5, 0))
+    assert object_distance_shift_m(object_distance, first, second) == pytest.approx(3)
+    # the Measure button does not reset the fields: the 0 results were not written and the 3 mm stayed
+    object_distance.app.collection.get_selected.return_value = [first, overlapping]
+    object_distance.ui.measure_btn.click()
+    ui = object_distance.ui
+    assert [float(e.get_value()) for e in (ui.total_distance_entry, ui.distance_y_entry, ui.angle_entry)] == [0, 0, 0]

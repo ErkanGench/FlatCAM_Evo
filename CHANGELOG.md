@@ -59,11 +59,13 @@ Circle resolution:
 Object Distance:
 
 - fixed: after one Shift+M with a wrong selection (not 2 objects), a Reset Tool or a change of the distance type, Shift+M did nothing for the rest of the session
+- fixed: the Measure button left the previous pair's distance, deltas and angle on screen when the new result was 0 (touching or overlapping objects); a 0 is now shown
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - test_tool_distance_snap: Object Distance measures again with Shift+M after a wrong selection and after Reset Tool
+- test_tool_distance_snap: the Object Distance Measure button shows 0 for touching objects after a pair 3 mm apart
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
