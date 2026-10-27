@@ -4682,8 +4682,10 @@ class AppGerberEditor(QtCore.QObject):
         elif col_of_item_changed == 4:
             if str(self.storage_dict[ap_code_old]['type']) == 'R' or \
                     str(self.storage_dict[ap_code_old]['type']) == 'REG':
-                # use the biggest from them
-                buff_val_lines = max(val_edited)
+                # use the biggest from them: a track grows (or shrinks) by half of its change, like a 'C' size edit
+                old_aperture = self.storage_dict[ap_code_old]
+                buff_val_lines = (max(val_edited) - max(float(old_aperture['width']),
+                                                        float(old_aperture['height']))) / 2
                 new_width = val_edited[0]
                 new_height = val_edited[1]
 
@@ -4703,7 +4705,7 @@ class AppGerberEditor(QtCore.QObject):
                                 geo = box(xmin=minx, ymin=miny, xmax=maxx, ymax=maxy)
                                 new_geo_el['solid'] = deepcopy(geo)
                             else:
-                                new_geo_el['solid'] = deepcopy(g_data['solid'].buffer(buff_val_lines, quad_segs=gerber_quad(self.app, buff_val_lines)))
+                                new_geo_el['solid'] = deepcopy(g_data['solid'].buffer(buff_val_lines, join_style="mitre"))
                     if 'follow' in g_data:
                         new_geo_el['follow'] = deepcopy(g_data['follow'])
                     if 'clear' in g_data:

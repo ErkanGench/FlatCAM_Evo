@@ -1,8 +1,8 @@
 """Regression tests for Gerber Editor defect fixes: Qt slot signatures, the Scale tool connection, history of
 translations and reshapes, import failure recovery, size selection and delete, region operations, aperture table
 edit signal recovery, the marked-polygon list, region-export flag, buffer and scale without a shape, the buffer
-factor check, numeric aperture codes, history depth on error, the zoom switch of update_ui, and the Pad and Pad Array
-tools with obround apertures.
+factor check, numeric aperture codes, history depth on error, the zoom switch of update_ui, the Pad and Pad Array
+tools with obround apertures, and the Dims edit of a rectangular aperture with tracks.
 
 The editor is the real AppGerberEditor built by test_gerber_editor_pick.make_editor; the application, the canvas and
 the worker are stand-ins. Everything is headless and does not sleep."""
@@ -271,4 +271,28 @@ def test_aperture_table_shows_editable_obround_dimensions():
     item = editor.ui.apertures_table.item(0, 4)
     assert [float(value) for value in item.text().split(',')] == [1.7, 1.0]
     assert item.flags() & QtCore.Qt.ItemFlag.ItemIsEditable
+
+
+# 20. Dims edit of an 'R' aperture with tracks: a track changes by half of the change, not by the new size
+
+def test_dimension_edit_changes_r_tracks_by_half_the_change():
+    # a 1 x 1 aperture drew a copper track and a clear track along X: both are 1 wide
+    track = DrawToolShape({'solid': box(-0.5, -0.5, 10.5, 0.5), 'follow': LineString([(0, 0), (10, 0)])})
+    clear = DrawToolShape({'clear': box(-0.5, 4.5, 10.5, 5.5), 'follow': LineString([(0, 5), (10, 5)])})
+    editor = make_editor({10: {'type': 'R', 'size': math.hypot(1, 1), 'width': 1.0, 'height': 1.0,
+                               'geometry': [track, clear]}})
+    editor.history.reset()
+    editor.tid2apcode = {1: 10}
+    editor.oldapcode_newapcode = {10: 10}
+    table = editor.ui.apertures_table
+    with QtCore.QSignalBlocker(table):
+        table.setItem(0, 4, QtWidgets.QTableWidgetItem('1.2, 1.2'))
+        table.setCurrentCell(0, 4)
+    reconnect_item_changed(editor)
+    editor.on_tool_edit()
+    new_track, new_clear = editor.storage_dict[10]['geometry']
+    # the sweep of a 1.2 x 1.2 aperture along the same paths
+    assert new_track.geo['solid'].equals(box(-0.6, -0.6, 10.6, 0.6))
+    assert new_clear.geo['clear'].equals(box(-0.6, 4.4, 10.6, 5.6))
+    assert len(editor.history.undo_stack) == 1
 
