@@ -59,11 +59,13 @@ Circle resolution:
 Geometry editor:
 
 - fixed: Paint accepted a tool diameter of zero or below; with a negative diameter the Standard method never ended (each pass larger than the last, until Abort), with zero it failed or Seed added only the outline; Paint now refuses it with a message
+- fixed: Paint did not start with the method set in Preferences (Standard gave Seed, Seed and Lines gave Standard); the preference is an index and is now used as one
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - test_geo_editor_performance: the editor's Paint refuses a tool diameter of zero or below
+- test_geo_editor_performance: the editor's Paint starts with the method of the Paint preference
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

@@ -11,7 +11,7 @@ from shapely.ops import unary_union
 
 from appEditors.appGeoEditor import AppGeoEditor, FCMove, FCCopy, FCEraser, DrawToolShape, FCCircle, FCRectangle
 from appEditors.geo_plugins.GeoBufferPlugin import BufferSelectionTool
-from appEditors.geo_plugins.GeoPaintPlugin import PaintOptionsTool
+from appEditors.geo_plugins.GeoPaintPlugin import PaintEditorUI, PaintOptionsTool
 from appEditors.geo_plugins.GeoTransformationPlugin import TransformEditorTool
 from camlib import Geometry, translate_geometry
 from test_geo_editor_delete_plot import line, selection_editor
@@ -131,3 +131,16 @@ def test_paint_refuses_a_tool_diameter_of_zero_or_less():
         assert tool.paint.called is accepted
         if not accepted:
             assert 'greater than zero' in tool.app.inform.emit.call_args.args[0]
+
+
+def test_paint_uses_the_method_of_the_preferences():
+    qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])  # noqa: F841 - kept for the widgets
+    app = SimpleNamespace(decimals=4, options={},
+                          defaults=SimpleNamespace(get=lambda key, default=None: default, factory_defaults={}))
+    tool = SimpleNamespace(app=app)
+    tool.ui = PaintEditorUI(layout=QtWidgets.QVBoxLayout(), paint_class=tool)
+    # the preference is an index: 0 Standard, 1 Seed, 2 Lines; Laser_lines (3) and Combo (4) are not in the editor
+    for preference, method in ((0, 'Standard'), (1, 'Seed'), (2, 'Lines'), (4, 'Standard')):
+        app.options = {'tools_paint_method': preference}
+        PaintOptionsTool.set_tool_ui(tool)
+        assert tool.ui.paintmethod_combo.get_value() == method
