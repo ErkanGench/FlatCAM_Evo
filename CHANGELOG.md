@@ -64,11 +64,16 @@ Cutout:
 
 - fixed: "Create Excellon Object" made alignment holes that the pins do not fit after the board is flipped (the Type of the holes differed from the Mirror axis) without a word; it now warns and names the Type to use
 
+Align Objects:
+
+- fixed: after an alignment (manual or automatic) View Source and Save source gave the file as it was before the alignment; the source of an aligned Gerber or Excellon object is now written again, as after a Transform
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - Cutout: a tool added from the search or from the Tools Database keeps the Automatic widgets and shows the widgets of its gap type
 - 2-Sided: a warning when the alignment holes do not fit the pins after the flip, none for a hole on the Mirror axis
+- Align Objects: the source of an aligned Gerber and Excellon object parses back to the aligned geometry
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
