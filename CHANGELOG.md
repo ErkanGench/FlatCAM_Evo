@@ -69,6 +69,10 @@ Plotting:
 - fixed: a color change of an object (Project menu: Color, Opacity, Default) froze the GUI in a large project: each shape of the shared shape collection was looked up in the list of the object's shapes (O(N*M)); measured with 40000 + 20000 shapes, the color change of the 20000 shapes took 10 s and now takes 1 to 3 s; the same in update_visibility() of the collection
 - fixed: the path numbers (annotations) of a CNCJob stayed on the canvas when the object was hidden through its visible property (for example the source CNCJob that Levelling hides): the first text group of a text collection has the key 0, which the visibility setter took for "no texts"
 
+Exclusion areas:
+
+- fixed: the right click that ends the drawing made the union of the whole object geometry again for each area, on the GUI thread (6 areas and 5000 polygons: 14 s, now 2 s), and 1 area over the object geometry deleted all the areas, also the ones added before; now only the areas over the object geometry are deleted and the exclusion tables show the areas that are left
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
@@ -76,6 +80,7 @@ Tests:
 - new unit tests for the Find menu and the PageUp / PageDown keys of the shell output (tests/test_headless_console.py)
 - new unit test for the color change and the visibility of the shapes of a group in a shared shape collection (tests/test_plot_visibility_toggle.py)
 - new unit test for the annotations of a hidden object (tests/test_plot_visibility_toggle.py)
+- tests/test_exclusion_area_travel.py: an exclusion area over the object geometry is the only area removed at the end of the drawing
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
