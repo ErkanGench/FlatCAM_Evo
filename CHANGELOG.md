@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Code Editor:
+
+- fixed: Replace All searched from the cursor, so the matches at and above the current selection (after a Find: the first match) kept their old value; it also left the text document in an open edit block, so later edits no longer marked the text as not saved and one Undo removed them together with the replacement; Replace All now replaces every match from the start of the text in one Undo step
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- new unit tests for Replace All of the code editor (tests/test_lazy_highlight.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
