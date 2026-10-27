@@ -2639,6 +2639,8 @@ class ToolsDB2(QtWidgets.QWidget):
 
         self.ui.name_entry.editingFinished.connect(self.update_tree_name)
         self.ui.dia_entry.editingFinished.connect(self.update_tree_tooldia)
+        self.ui.tol_min_entry.editingFinished.connect(self.on_tolerance_edited)
+        self.ui.tol_max_entry.editingFinished.connect(self.on_tolerance_edited)
 
         for key in self.form_fields:
             wdg = self.form_fields[key]
@@ -2679,6 +2681,11 @@ class ToolsDB2(QtWidgets.QWidget):
             self.ui.dia_entry.editingFinished.disconnect(self.update_tree_tooldia)
         except (TypeError, AttributeError):
             pass
+        for tol_entry in (self.ui.tol_min_entry, self.ui.tol_max_entry):
+            try:
+                tol_entry.editingFinished.disconnect(self.on_tolerance_edited)
+            except (TypeError, AttributeError):
+                pass
 
         try:
             self.ui.mill_shape_combo.currentIndexChanged.disconnect(self.on_calculate_tooldia)
@@ -2746,6 +2753,19 @@ class ToolsDB2(QtWidgets.QWidget):
 
     def update_tree_tooldia(self):
         self.model.update_tool(self.current_toolid)
+
+    def on_tolerance_edited(self):
+        """
+        Keep Min <= Max for the diameter tolerance, which the save requires: a Min typed above Max moves Max up to
+        it, a Max typed below Min moves Min down to it. The other spinner then updates the storage.
+        """
+        tol_min, tol_max = self.ui.tol_min_entry, self.ui.tol_max_entry
+        if tol_min.get_value() <= tol_max.get_value():
+            return
+        if self.sender() is tol_max:
+            tol_min.set_value(tol_max.get_value())
+        else:
+            tol_max.set_value(tol_min.get_value())
 
     def update_storage(self):
         """

@@ -271,6 +271,26 @@ class EditorChecks(DatabaseCase):
         self.assertTrue(self.app.tools_db_changed_flag)
         self.assertTrue(db.ui.status_label.text())
 
+    def test_typed_tolerance_min_and_max_stay_in_order(self):
+        # Min and Max were free: a Min typed for a new tool (Max still 0.0) made Save DB fail
+        from PyQt6.QtTest import QTest
+        db = self.database()
+        db.on_tool_add()
+
+        def typed(widget, text):
+            widget.selectAll()
+            QTest.keyClicks(widget, text)
+            QTest.keyClick(widget, QtCore.Qt.Key.Key_Return)
+            data = db.db_tool_dict['1']['data']
+            return round(data['tol_min'], 4), round(data['tol_max'], 4)
+
+        self.assertEqual((0.09, 0.09), typed(db.ui.tol_min_entry, '0.09'))
+        self.assertTrue(db.on_save_tools_db())
+        self.assertEqual((0.09, 0.12), typed(db.ui.tol_max_entry, '0.12'))
+        self.assertEqual((0.05, 0.05), typed(db.ui.tol_max_entry, '0.05'))
+        self.assertTrue(db.on_save_tools_db())
+        self.assertEqual([], self.slot_errors)
+
     def test_sqlite_migration_preserves_legacy_and_unknown_fields(self):
         import appDatabase
         source = {'7': record(4), '42': record(2)}

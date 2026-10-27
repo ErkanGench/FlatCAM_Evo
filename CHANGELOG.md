@@ -73,6 +73,10 @@ Exclusion areas:
 
 - fixed: the right click that ends the drawing made the union of the whole object geometry again for each area, on the GUI thread (6 areas and 5000 polygons: 14 s, now 2 s), and 1 area over the object geometry deleted all the areas, also the ones added before; now only the areas over the object geometry are deleted and the exclusion tables show the areas that are left
 
+Tools Database:
+
+- fixed: the Min and Max of the diameter tolerance were free, so a Min typed for a new tool (Max still 0.0) made Save DB fail, and the tab could not be closed or a tool transferred without losing the edits; a Min typed above Max now moves Max up to it, a Max typed below Min moves Min down to it
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
@@ -81,6 +85,7 @@ Tests:
 - new unit test for the color change and the visibility of the shapes of a group in a shared shape collection (tests/test_plot_visibility_toggle.py)
 - new unit test for the annotations of a hidden object (tests/test_plot_visibility_toggle.py)
 - tests/test_exclusion_area_travel.py: an exclusion area over the object geometry is the only area removed at the end of the drawing
+- new unit test for the typed Min and Max of the tolerance in the Tools Database (tests/test_tools_database.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
