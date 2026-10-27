@@ -60,12 +60,14 @@ Circle resolution:
 Code Editor:
 
 - fixed: Replace All searched from the cursor, so the matches at and above the current selection (after a Find: the first match) kept their old value; it also left the text document in an open edit block, so later edits no longer marked the text as not saved and one Undo removed them together with the replacement; Replace All now replaces every match from the start of the text in one Undo step
+- fixed: Exit Editor -> Yes with another Plot Area tab after the Code Editor tab (for example Preferences) gave a Critical Error dialog and left the app in the editor mode; closing the Code Editor tab with its X also closed the next tab (without the unsaved changes question of Preferences); only the Code Editor tab is closed now, once, and the editor mode ends
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - new unit tests for Replace All of the code editor (tests/test_lazy_highlight.py)
 - new unit test for the project save and load of a Document object (tests/test_object_construction.py)
+- new unit tests for the exit of the Code Editor with its tab between other Plot Area tabs (tests/test_editor_save_modes.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
