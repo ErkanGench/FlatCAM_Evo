@@ -3783,7 +3783,10 @@ class App(QtCore.QObject):
         if self.abort_flag is False:
             msg = "%s %s" % (_("Aborting."), _("The current task will be gracefully closed as soon as possible..."))
             self.inform.emit(msg)
-            self.abort_flag = True
+            # only the end of a process clears the flag (app_is_idle()): set while no Tcl script, process or worker
+            # task runs, it would cancel the next task that the user starts
+            self.abort_flag = interrupt is not None or self.proc_container.get_procs_count() > 0 or \
+                self.workers.pending_count() > 0
             self.cleanup.emit()  # noqa
 
     def app_is_idle(self):
