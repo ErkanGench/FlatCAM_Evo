@@ -62,6 +62,7 @@ Application:
 - fixed: a rename (Project tree, the name field in Properties, the G-code export that names the CNC job after the file) could give an object the name of another object; the Objects menu, Tcl and the plugin lists then used the first object of that name; the name now gets a number as for a new object (top_1), and an empty name is not used
 - fixed: each project opened in the GUI made a new Tcl Shell and kept the old one hidden in memory with its Tcl interpreter and its text; the auto-completer kept updating the first, hidden shell, so the visible shell completed no object names or Tcl commands; the old shell is now deleted and the new one gets the keywords
 - fixed: Ctrl+Alt+X (abort) with no task running left the abort flag set until a process ended, so the next file opened or the next G-code or geometry generation was cancelled with "The current task was gracefully closed on user request..."; the flag is now set only while a Tcl script, a process or a worker task runs
+- fixed: the timer that ends a project save was made in the worker thread of the save, so a long task queued after the save on the same worker (an NCC, for example) kept the save "in progress" until it ended; closing FlatCAM and switching projects waited that long; the timer now runs in the GUI thread
 
 Tests:
 
@@ -70,6 +71,7 @@ Tests:
 - added regression checks that a rename gives the name of another object a number
 - added a regression check that a Tcl reset deletes the old shell and gives the new one the auto-completer keywords
 - added a regression check that an abort with nothing running does not cancel the next task
+- added regression checks that a close during a save does not wait for the next task of the save worker
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
