@@ -4132,7 +4132,7 @@ class MainGUI(QtWidgets.QMainWindow):
             # CTRL
             if modifiers == QtCore.Qt.KeyboardModifier.ControlModifier:
                 # Select All
-                if key == QtCore.Qt.Key.Key_E or key == 'A':
+                if key == QtCore.Qt.Key.Key_A or key == 'A':
                     self.app.grb_editor.ui.apertures_table.selectAll()
                     return
 
@@ -4381,7 +4381,7 @@ class MainGUI(QtWidgets.QMainWindow):
             # CTRL
             if modifiers == QtCore.Qt.KeyboardModifier.ControlModifier:
                 # Select All
-                if key == QtCore.Qt.Key.Key_E or key == 'A':
+                if key == QtCore.Qt.Key.Key_A or key == 'A':
                     self.app.exc_editor.ui.tools_table_exc.selectAll()
                     return
 

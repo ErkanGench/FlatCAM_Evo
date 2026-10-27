@@ -65,6 +65,7 @@ Geometry editor:
 Editors:
 
 - fixed: in the Geometry, Gerber and Excellon editors '-' zoomed in and '=' zoomed out, the opposite of the main canvas and of the View menu; they now zoom out and in as everywhere else
+- fixed: Ctrl+E in the Gerber editor selected all the apertures instead of opening the Eraser (in the Excellon editor it selected all the tools), and Ctrl+A from the Project tab did not select all; the Select All key test checked E instead of A
 
 Tests:
 
@@ -73,6 +74,7 @@ Tests:
 - test_geo_editor_performance: the editor's Paint starts with the method of the Paint preference
 - test_geo_editor_history: the editor load and the boolean operations change the widgets in the GUI thread, not in the worker
 - test_app_history_keys: '-' zooms out and '=' zooms in, in the editors as on the main canvas
+- test_app_history_keys: Ctrl+E opens the Gerber editor's Eraser; Ctrl+A selects all in the Gerber and Excellon editors
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

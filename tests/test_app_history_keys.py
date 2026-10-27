@@ -105,6 +105,21 @@ class TestEditorKeys(unittest.TestCase):
                 factors.append(gui.app.plotcanvas.zoom.call_args.args[0])
             self.assertEqual(factors, [1.5, 1 / 1.5], source)
 
+    def test_ctrl_e_opens_the_eraser_and_ctrl_a_selects_all_in_the_gerber_and_excellon_editors(self):
+        gui = press(QtCore.Qt.Key.Key_E, CTRL, 'grb_editor')
+        gui.app.grb_editor.on_eraser.assert_called_once()
+        gui.app.grb_editor.ui.apertures_table.selectAll.assert_not_called()
+
+        gui = press(QtCore.Qt.Key.Key_E, CTRL, 'exc_editor')
+        gui.app.exc_editor.ui.tools_table_exc.selectAll.assert_not_called()
+
+        # Ctrl+A from the canvas ('A') and from the Project tab (an int key code)
+        for key in ('A', QtCore.Qt.Key.Key_A):
+            gui = press(key, CTRL, 'grb_editor')
+            gui.app.grb_editor.ui.apertures_table.selectAll.assert_called_once()
+            gui = press(key, CTRL, 'exc_editor')
+            gui.app.exc_editor.ui.tools_table_exc.selectAll.assert_called_once()
+
 
 if __name__ == '__main__':
     unittest.main()
