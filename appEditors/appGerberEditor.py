@@ -3630,7 +3630,7 @@ class TransformEditorGrb(ShapeToolEditorGrb):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.apertures_table.clearSelection()
+        self.draw_app.ui.apertures_table.clearSelection()
         self.draw_app.plot_all()
 
 

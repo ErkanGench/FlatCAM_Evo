@@ -31,6 +31,7 @@ Gerber editor:
 - Track: hold Space for a grid ten times finer while routing; releasing Space restores the normal grid and refreshes the live preview
 - rectangular and obround apertures now have separate Width and Height fields; both dimensions must be finite and positive
 - fixed: aperture, feature and Select All table selections now respect the Zoom checkbox
+- fixed: Esc in the Transform tool (Alt+R) logged an error and left the editor in the Transform tool; it now clears the selection and returns to the Select tool
 
 Canvas and Jump:
 
@@ -59,6 +60,7 @@ Circle resolution:
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- regression test for Esc in the Gerber editor Transform tool (tests/test_grb_editor_transform.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
