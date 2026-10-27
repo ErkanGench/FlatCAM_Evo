@@ -3324,7 +3324,8 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 # Copy an FlatCAM object
                 if key == QtCore.Qt.Key.Key_C:
-                    widget_name = self.plot_tab_area.currentWidget().objectName()
+                    current_tab = self.plot_tab_area.currentWidget()
+                    widget_name = current_tab.objectName() if current_tab is not None else ''
                     if widget_name == 'database_tab':
                         # Tools DB saved, update flag
                         self.app.tools_db_changed_flag = True
@@ -3343,7 +3344,8 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 # Open Gerber file
                 if key == QtCore.Qt.Key.Key_G:
-                    widget_name = self.plot_tab_area.currentWidget().objectName()
+                    current_tab = self.plot_tab_area.currentWidget()
+                    widget_name = current_tab.objectName() if current_tab is not None else ''
                     if 'editor' in widget_name.lower():
                         self.goto_text_line()
                     else:
@@ -3367,7 +3369,8 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 # Save Project
                 if key == QtCore.Qt.Key.Key_S:
-                    widget_name = self.plot_tab_area.currentWidget().objectName()
+                    current_tab = self.plot_tab_area.currentWidget()
+                    widget_name = current_tab.objectName() if current_tab is not None else ''
                     if widget_name == 'preferences_tab':
                         self.app.preferencesUiManager.on_save_button(save_to_file=False)
                         return
@@ -3624,7 +3627,8 @@ class MainGUI(QtWidgets.QMainWindow):
                 # It's meant to make a difference between delete objects and delete tools in
                 # Geometry Selected tool table
                 if key == QtCore.Qt.Key.Key_Delete:
-                    widget_name = self.plot_tab_area.currentWidget().objectName()
+                    current_tab = self.plot_tab_area.currentWidget()
+                    widget_name = current_tab.objectName() if current_tab is not None else ''
                     if widget_name == 'database_tab':
                         # Tools DB saved, update flag
                         self.app.tools_db_changed_flag = True
@@ -3761,7 +3765,8 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 # Add a Tool from shortcut
                 if key == QtCore.Qt.Key.Key_T:
-                    widget_name = self.plot_tab_area.currentWidget().objectName()
+                    current_tab = self.plot_tab_area.currentWidget()
+                    widget_name = current_tab.objectName() if current_tab is not None else ''
                     if widget_name == 'database_tab':
                         # Tools DB saved, update flag
                         self.app.tools_db_changed_flag = True

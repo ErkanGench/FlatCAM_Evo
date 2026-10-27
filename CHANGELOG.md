@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Main Window:
+
+- fixed: with the Plot Area closed (View -> Toggle Plot Area, Ctrl+F10) and no other tab open, Ctrl+S in the Project tab did not save the project and gave a Critical Error dialog; Ctrl+C, Ctrl+G, Delete and T did the same
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- new unit tests for the Project tab keys with the Plot Area closed (tests/test_app_history_keys.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
