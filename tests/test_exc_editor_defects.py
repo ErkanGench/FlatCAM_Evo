@@ -10,7 +10,7 @@ from PyQt6 import QtCore, QtWidgets
 from shapely.affinity import translate
 from shapely.geometry import Point
 
-from appEditors.appExcEditor import AppExcEditor, CopyEditorExc, DrillArray, SlotArray
+from appEditors.appExcEditor import AppExcEditor, CopyEditorExc, DrillArray, MoveEditorExc, SlotArray
 from appEditors.appGeoEditor import AppGeoEditor, DrawTool
 from appGUI.MainGUI import MainGUI
 from defaults import AppDefaults
@@ -299,3 +299,22 @@ def test_copy_enter_with_a_typed_length_copies_towards_the_cursor(monkeypatch):
     press(editor, 'Enter', monkeypatch)
     assert added_centers(editor) == pytest.approx([6, 8])
     editor.select_tool.assert_called_with('drill_select')
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# 14. Enter with the Move tool clicks at the cursor
+# ---------------------------------------------------------------------------------------------------------------
+
+def test_enter_with_the_move_tool_moves_the_selection_to_the_cursor(monkeypatch):
+    editor, first, _second = scene()
+    editor.delete_utility_geometry = Mock()
+    tool = MoveEditorExc.__new__(MoveEditorExc)
+    DrawTool.__init__(tool, editor)
+    tool.name, tool.origin, tool.destination, tool.selected_dia_list = 'drill_move', (0.0, 0.0), None, [1.0]
+    editor.active_tool = tool
+    editor.on_canvas_click_left_handler = tool.click
+    editor.snap_x, editor.snap_y = 2.0, 3.0  # the cursor
+    press(editor, 'Enter', monkeypatch)
+    drills = [shape for shape in editor.storage_dict[1.0].get_objects() if shape.geo.geom_type == 'MultiLineString']
+    assert len(drills) == 1 and drills[0] is not first
+    assert (drills[0].geo.centroid.x, drills[0].geo.centroid.y) == pytest.approx((2, 3))
