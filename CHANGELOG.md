@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+File loading:
+
+- fixed: a Gerber or HPGL2 file with a letter that is not ASCII in a comment or an attribute (for example a UTF-8 'Ş') failed with "An internal error has occurred" when the code page of the system could not decode it (cp1254 on a Turkish Windows); these files are now read as UTF-8 and a byte that is not UTF-8 is replaced, the geometry is not affected
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- tests/test_gerber_parser.py: a Gerber and an HPGL2 file with letters that are not ASCII in a comment or an attribute, saved as UTF-8 and as cp1254
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
