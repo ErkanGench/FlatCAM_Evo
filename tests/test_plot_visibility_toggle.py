@@ -70,6 +70,39 @@ class TestShapeGroupVisibility(unittest.TestCase):
         self.group.update_visibility(False, indexes=keys[2:])
         self.assertFalse(self.line.visible)
 
+
+class _CountedKeys(list):
+    """The key list of a group that counts the 'key in list' tests."""
+    lookups = 0
+
+    def __contains__(self, key):
+        self.lookups += 1
+        return list.__contains__(self, key)
+
+
+class TestSharedCollectionKeys(unittest.TestCase):
+
+    def test_recolor_and_visibility_look_up_the_group_keys_in_a_set(self):
+        # update_color() and update_visibility() of the collection tested 'key in list' with the key list of the
+        # group, for each shape of the collection that all the objects share: a recolor (Project menu > Color) of
+        # a 20000-shape Gerber in a 60000-shape project took 10 s
+        from appGUI.VisPyVisuals import ShapeGroup
+        collection = _new_collection()
+        other, group = ShapeGroup(collection), ShapeGroup(collection)
+        _add_squares(other, 3)
+        _add_squares(group, 2, start=10)
+        collection.redraw()
+        group._indexes = _CountedKeys(group._indexes)
+
+        group.redraw(update_colors=('#0000FFFF', '#000088FF'))
+        self.assertEqual([collection.data[k]['face_color'] for k in group._indexes], ['#0000FFFF'] * 2)
+        self.assertEqual([collection.data[k]['face_color'] for k in other._indexes], ['#00FF00FF'] * 3)
+        collection.update_visibility(False, group._indexes)
+        self.assertEqual([collection.data[k]['visible'] for k in other._indexes + group._indexes],
+                         [True] * 3 + [False] * 2)
+        self.assertEqual(group._indexes.lookups, 0)
+
+
 class TestMoveToTop(unittest.TestCase):
 
     def setUp(self):

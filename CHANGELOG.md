@@ -64,11 +64,16 @@ Tcl Shell:
 
 - fixed: Find in the right-click menu of the shell output did nothing (only Ctrl+F worked); PageUp / PageDown in the command line and the navigation keys in the output did not scroll the output
 
+Plotting:
+
+- fixed: a color change of an object (Project menu: Color, Opacity, Default) froze the GUI in a large project: each shape of the shared shape collection was looked up in the list of the object's shapes (O(N*M)); measured with 40000 + 20000 shapes, the color change of the 20000 shapes took 10 s and now takes 1 to 3 s; the same in update_visibility() of the collection
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - new unit tests for the PDF save of the code editor (tests/test_object_construction.py)
 - new unit tests for the Find menu and the PageUp / PageDown keys of the shell output (tests/test_headless_console.py)
+- new unit test for the color change and the visibility of the shapes of a group in a shared shape collection (tests/test_plot_visibility_toggle.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

@@ -773,6 +773,9 @@ class ShapeCollectionVisual(CompoundVisual):
         return True
 
     def update_visibility(self, state: bool, indexes=None) -> None:
+        if indexes is not None:
+            # a set: the keys of a group come as a list, and 'k in list' for each shape of the collection is O(N*M)
+            indexes = set(indexes)
         # Lock sub-visuals updates
         self.update_lock.acquire(True)
         if indexes is None:
@@ -794,6 +797,11 @@ class ShapeCollectionVisual(CompoundVisual):
 
         if not self.data:
             return
+
+        if indexes is not None:
+            # a set: ShapeGroup.redraw() gives its keys as a list, and 'k in list' for each shape of the shared
+            # collection is O(N*M), seconds for a large project
+            indexes = set(indexes)
 
         # Mark buffers as dirty (color changes require visual update)
         self._dirty = True
