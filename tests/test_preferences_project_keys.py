@@ -135,6 +135,20 @@ class TestPreferencesColors(unittest.TestCase):
         group.sf_color_entry.editingFinished.emit()
         self.assertEqual(app.options['global_sel_fill'], '#112233bf')
 
+    def test_opening_keeps_the_right_to_left_selection_alpha(self):
+        group, app, defaults = make_group(GeneralGUIPrefGroupUI)
+        self.addCleanup(group.deleteLater)
+        manager = make_manager()[0]
+        manager.defaults = defaults
+        manager.ui = MagicMock(app=app)
+        manager.ui.general_pref_form.general_gui_group = group
+        defaults['global_alt_sel_fill'] = '#BBF26840'
+        defaults['global_alt_sel_line'] = '#006E2040'
+        manager._PreferencesUIManager__init_color_pickers()
+        self.assertEqual(group.right_left_alpha_entry.get_value(), 0x40)
+        self.assertEqual(app.options['global_alt_sel_fill'], '#BBF26840')
+        self.assertEqual(app.options['global_alt_sel_line'], '#006E2040')
+
 
 if __name__ == '__main__':
     unittest.main()

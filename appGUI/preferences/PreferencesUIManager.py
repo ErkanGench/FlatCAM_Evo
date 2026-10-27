@@ -1248,7 +1248,7 @@ class PreferencesUIManager(QtCore.QObject):
             self._pref('global_alt_sel_line'))
 
         self.ui.general_pref_form.general_gui_group.right_left_alpha_entry.set_value(
-            self._pref_alpha('global_sel_fill'))
+            self._pref_alpha('global_alt_sel_fill'))
 
         # Init Draw color and Selection Draw Color
         self.ui.general_pref_form.general_gui_group.draw_color_entry.set_value(
