@@ -3912,6 +3912,7 @@ class AppGerberEditor(QtCore.QObject):
         self.app.ui.grb_add_semidisc_menuitem.triggered.connect(self.on_add_semidisc)
         self.app.ui.grb_add_disc_menuitem.triggered.connect(self.on_disc_add)
         self.app.ui.grb_add_buffer_menuitem.triggered.connect(lambda: self.select_tool('buffer'))
+        self.app.ui.grb_simplification_menuitem.triggered.connect(self.on_simplification)
         self.app.ui.grb_add_scale_menuitem.triggered.connect(lambda checked=False: self.select_tool('scale'))
         self.app.ui.grb_add_eraser_menuitem.triggered.connect(self.on_eraser)
         self.app.ui.grb_add_markarea_menuitem.triggered.connect(self.on_markarea)

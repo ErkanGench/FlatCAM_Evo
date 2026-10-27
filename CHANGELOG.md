@@ -34,6 +34,7 @@ Gerber editor:
 - fixed: Esc in the Transform tool (Alt+R) logged an error and left the editor in the Transform tool; it now clears the selection and returns to the Select tool
 - fixed: Space in the Pad Array tool ("Toggle array direction" in the shortcut list) logged an error and did nothing; it now switches the direction of a linear array X -> Y -> Angle -> X
 - fixed: SemiDisc stopped responding until Esc after three points on one line (Point1 -> Point3 -> Point2 mode) or two equal chord ends (Start -> Stop -> Center mode), with an error in the log; such a point is now refused with "Choose distinct, non-collinear arc points." and the tool waits for another one
+- fixed: the Gerber editor Simplification menu item was in the Geometry Editor menu (a second "Simplification" entry there that did nothing); it is now in the Gerber Editor menu after Buffer and opens the Simplification tool
 
 Canvas and Jump:
 
@@ -65,6 +66,7 @@ Tests:
 - regression test for Esc in the Gerber editor Transform tool (tests/test_grb_editor_transform.py)
 - regression test for Space in the Gerber editor Pad Array tool (tests/test_gerber_editor_features.py)
 - regression tests for SemiDisc points that make no arc (tests/test_gerber_action_parity.py)
+- regression tests for the Gerber editor Simplification menu item and the menu of each editor menu item (tests/test_gerber_editor_defects.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
