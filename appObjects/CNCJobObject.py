@@ -770,28 +770,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         if self.source_file == '':
             return 'fail'
 
-        try:
-            force_windows_line_endings = self._app_option('cncjob_line_ending')
-            if self.gcode_imported:
-                # the text of the file as it is: no translation of the line endings, the encoding of the file
-                with open(filename, 'w', newline='', encoding=self.gcode_encoding, errors='replace') as f:
-                    f.write(self.source_file)
-            elif force_windows_line_endings and sys.platform != 'win32':
-                with open(filename, 'w', newline='\r\n') as f:
-                    for line in self.source_file:
-                        f.write(line)
-            else:
-                with open(filename, 'w') as f:
-                    for line in self.source_file:
-                        f.write(line)
-        except FileNotFoundError:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No such file or directory"))
-            return
-        except PermissionError:
-            self.app.inform.emit(
-                '[WARNING] %s' % _("Permission denied, saving not possible.\n"
-                                   "Most likely another app is holding the file open and not accessible.")
-            )
+        if self._save_gcode_file(filename, self.source_file) == 'fail':
             return 'fail'
 
         if self._app_option("global_open_style") is False:
@@ -1249,29 +1228,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
 
         # Write
         if filename is not None:
-            try:
-                force_windows_line_endings = self._app_option('cncjob_line_ending')
-                if getattr(self, 'gcode_imported', False):
-                    # the text of the file as it is: no translation of the line endings, the encoding of the file
-                    with open(filename, 'w', newline='', encoding=getattr(self, 'gcode_encoding', 'utf-8'),
-                              errors='replace') as f:
-                        f.write(g)
-                elif force_windows_line_endings and sys.platform != 'win32':
-                    with open(filename, 'w', newline='\r\n') as f:
-                        for line in lines:
-                            f.write(line)
-                else:
-                    with open(filename, 'w') as f:
-                        for line in lines:
-                            f.write(line)
-            except FileNotFoundError:
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _("No such file or directory"))
-                return 'fail'
-            except PermissionError:
-                self.app.inform.emit(
-                    '[WARNING] %s' % _("Permission denied, saving not possible.\n"
-                                       "Most likely another app is holding the file open and not accessible.")
-                )
+            if CNCJobObject._save_gcode_file(self, filename, g) == 'fail':
                 return 'fail'
         elif to_file is False:
             # Just for adding it to the recent files list.
@@ -1282,6 +1239,49 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             self.app.inform.emit('[success] %s: %s' % (_("Saved to"), filename))
         else:
             return lines
+
+    def _save_gcode_file(self, filename, text):
+        """
+        Writes the G-code text to the file in 1 write. The text goes to a temporary file in the same folder, which
+        replaces the file only after a complete write: a write that fails (a full or a removed SD card) leaves the old
+        file as it was, not a cut G-code without its end code under the name of the file.
+
+        :param filename:    path of the file
+        :param text:        the G-code text
+        :return:            'fail' when the file is not written (the message is shown), else None
+        """
+        force_windows_line_endings = self._app_option('cncjob_line_ending')
+        if getattr(self, 'gcode_imported', False):
+            # the text of the file as it is: no translation of the line endings, the encoding of the file
+            file_options = {'newline': '', 'encoding': getattr(self, 'gcode_encoding', 'utf-8'), 'errors': 'replace'}
+        elif force_windows_line_endings and sys.platform != 'win32':
+            file_options = {'newline': '\r\n'}
+        else:
+            file_options = {}
+
+        temp_filename = filename + '.tmp'
+        try:
+            with open(temp_filename, 'w', **file_options) as f:
+                f.write(text)
+                # the errors of the drive come here, before the file is replaced
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_filename, filename)
+        except (OSError, UnicodeError) as err:
+            try:
+                os.remove(temp_filename)
+            except OSError:
+                pass
+            if isinstance(err, FileNotFoundError):
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("No such file or directory"))
+            elif isinstance(err, PermissionError):
+                self.app.inform.emit(
+                    '[WARNING] %s' % _("Permission denied, saving not possible.\n"
+                                       "Most likely another app is holding the file open and not accessible.")
+                )
+            else:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not save the file"), str(err)))
+            return 'fail'
 
     def get_gcode(self, preamble='', postamble=''):
         """

@@ -10,12 +10,13 @@ code and no drill moves at all.
 import importlib
 import pkgutil
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 import appPreProcessor
 import preprocessors
+from appGUI.ObjectUI import CNCObjectUI
 from appObjects.CNCJobObject import CNCJobObject
 
 for _module in pkgutil.iter_modules(preprocessors.__path__):
@@ -231,3 +232,104 @@ def test_gcode_without_tool_data_opens_with_defaults_and_warns_once(tmp_path, co
     warnings = [c.args[0] for c in app.inform.emit.call_args_list
                 if c.args[0].startswith('[WARNING_NOTCL]') and 'tool data' in c.args[0]]
     assert len(warnings) == 1 and '%g' % default in warnings[0] and 'G20/G21' in warnings[0]
+
+
+# ------------------------------------------------------------------------------------------------------------
+# The G-code file: Save CNC Code (export_gcode_handler) and the Tcl write_gcode (export_gcode with a file name)
+# ------------------------------------------------------------------------------------------------------------
+
+BODY = 'G0 X1 Y1\nG1 Z-0.1 F100\nG1 X10 Y1 F200\nG0 Z2\nM5\n'
+OLD_FILE = b'OLD G-CODE, STILL GOOD\r\n'
+
+
+def _ui_app(**options):
+    from tests.helpers_objects import make_app_0b
+
+    app = make_app_0b(**options)
+    app.preprocessors = PREPROCESSORS
+    app.version, app.version_date = 'test', 'test'
+    app.ui = MagicMock()
+    app.resource_location = 'assets/resources'
+    app.file_opened, app.file_saved = Mock(), Mock()
+    app.dec_format = round
+    return app
+
+
+def _ui_job(app, init=None):
+    """A Milling job as AppObject.new_object() makes it: the init function, then set_ui()."""
+    from PyQt6 import QtWidgets
+
+    # the Properties panel needs a QApplication; it is kept (a collected one ends the process)
+    _ui_job.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    with patch('appObjects.AppObjectTemplate.ShapeCollection', Mock()):
+        job = CNCJobObject('job', app)
+    job.obj_options['type'] = 'Geometry'
+    job.multitool = True
+    job.used_tools = [1]
+    job.tools = {1: {'tooldia': 0.1, 'data': {'tools_mill_ppname_g': 'default'}, 'gcode': BODY}}
+    job.gc_start = 'G21\nG90\n'
+    if init is not None:
+        init(job)
+    job.set_ui(CNCObjectUI(app=app))
+    return job
+
+
+def _save_both_ways(job, folder):
+    """Save CNC Code into 'button.nc' and the Tcl write_gcode into 'tcl.nc': their results."""
+    return (job.export_gcode_handler(str(folder / 'button.nc'), rename_object=False),
+            job.export_gcode(filename=str(folder / 'tcl.nc')))
+
+
+def test_a_failed_gcode_save_keeps_the_old_file_and_says_why(tmp_path):
+    import errno
+    import appObjects.CNCJobObject as cnc_module
+
+    real_open = open
+
+    def full_card_open(file, *args, **kwargs):
+        # the SD card is full after a few characters
+        handle = real_open(file, *args, **kwargs)
+        real_write = handle.write
+
+        def write(text):
+            real_write(text[:20])
+            raise OSError(errno.ENOSPC, 'No space left on device')
+
+        handle.write = write
+        return handle
+
+    job = _ui_job(_ui_app())
+    for name in ('button.nc', 'tcl.nc'):
+        (tmp_path / name).write_bytes(OLD_FILE)
+
+    with patch.object(cnc_module, 'open', full_card_open, create=True):
+        assert _save_both_ways(job, tmp_path) == ('fail', 'fail')
+
+    # before: the files were cut (the end code was missing) and the error went to the crash dialog
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['button.nc', 'tcl.nc']
+    assert (tmp_path / 'button.nc').read_bytes() == OLD_FILE and (tmp_path / 'tcl.nc').read_bytes() == OLD_FILE
+    errors = [c.args[0] for c in job.app.inform.emit.call_args_list if c.args[0].startswith('[ERROR_NOTCL]')]
+    assert len(errors) == 2 and all('Could not save the file' in e and 'No space' in e for e in errors)
+    job.app.file_saved.emit.assert_not_called()
+
+
+def test_the_gcode_file_is_written_in_one_write(tmp_path):
+    import appObjects.CNCJobObject as cnc_module
+
+    real_open = open
+    writes = []
+
+    def counting_open(file, *args, **kwargs):
+        handle = real_open(file, *args, **kwargs)
+        real_write = handle.write
+        handle.write = lambda text: (writes.append(len(text)), real_write(text))[1]
+        return handle
+
+    job = _ui_job(_ui_app())
+    with patch.object(cnc_module, 'open', counting_open, create=True):
+        assert _save_both_ways(job, tmp_path) == (None, None)
+
+    # before: 1 write() per character (Save CNC Code) or per line (Tcl), seconds for a big file
+    assert writes == [len(job.source_file)] * 2
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['button.nc', 'tcl.nc']
+    assert (tmp_path / 'button.nc').read_text() == (tmp_path / 'tcl.nc').read_text() == job.source_file
