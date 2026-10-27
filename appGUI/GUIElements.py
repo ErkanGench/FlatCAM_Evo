@@ -4475,6 +4475,19 @@ class FCTable(QtWidgets.QTableWidget):
         else:
             e.ignore()
 
+    def dragLeaveEvent(self, e: QtGui.QDragLeaveEvent) -> None:
+        # a drag that leaves the table (dropped elsewhere or cancelled with Esc) never reaches dropEvent, which
+        # unblocks the signals that dragEnterEvent blocked; blocked, the table ignores the tool edits and row clicks
+        self.blockSignals(False)
+        super().dragLeaveEvent(e)
+
+    def startDrag(self, supported_actions) -> None:
+        # the drag ends here in every case, also when no drop or leave event came
+        try:
+            super().startDrag(supported_actions)
+        finally:
+            self.blockSignals(False)
+
     # def dropEvent(self, event):
     #     """
     #     From here: https://stackoverflow.com/questions/26227885/drag-and-drop-rows-within-qtablewidget

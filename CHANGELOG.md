@@ -67,6 +67,7 @@ Tools Database:
 GUI:
 
 - fixed: the number fields committed each prefix of a typed number; a number over the maximum (1500 with a maximum of 1000) left the last prefix in the range (150) in a feed, speed or power field; the typed number is now committed on Enter or when the field loses the focus, and a number out of the range gives back the previous value
+- fixed: a drag in a tool table (Isolation, Drilling, Milling, NCC, Paint, the Geometry object, Bookmarks) that was dropped outside the table or cancelled with Esc left the signals of the table blocked, so the later diameter edits and row clicks were ignored; the signals are unblocked when the drag leaves the table and when it ends
 
 Tests:
 
@@ -74,6 +75,7 @@ Tests:
 - test_defaults_persistence: a save that fails (a value that cannot be saved, a full disk) keeps the old preferences file and leaves no temporary file
 - test_tools_database: the records saved before and after a Preferences Apply load with the options of both; wrong value types are still skipped
 - test_gui_elements_input (new): a number over the maximum keeps the previous value of a number field and no prefix is committed; the keypad Enter slots get the typed number; test_tools_database commits the typed parameters with Enter
+- test_gui_elements_input: a tool table drag that leaves the table or ends without a drop leaves the signals of the table unblocked
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

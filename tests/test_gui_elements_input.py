@@ -1,14 +1,14 @@
-"""Typing into the FlatCAM input widgets (GUIElements)."""
+"""Editing in the FlatCAM input widgets (GUIElements): the number fields and the tool tables."""
 import os
 
 import pytest
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtTest import QTest
 
-from appGUI.GUIElements import FCDoubleSpinner, FCSpinner
+from appGUI.GUIElements import FCDoubleSpinner, FCSpinner, FCTable
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -49,3 +49,52 @@ def test_typed_number_reaches_the_slots_of_the_keypad_enter(cls):
 
     assert spinner.get_value() == 950
     assert seen and set(seen) == {950}
+
+
+class DragFromTable:
+    """A drag enter event of a drag that started in the table (a real event has a source only during a drag)."""
+
+    def __init__(self, table):
+        self.table = table
+
+    def source(self):
+        return self.table
+
+    def accept(self):
+        pass
+
+
+def tool_table():
+    table = FCTable(drag_drop=True)
+    table.setColumnCount(2)
+    table.setRowCount(2)
+    for row in range(2):
+        for column in range(2):
+            table.setItem(row, column, QtWidgets.QTableWidgetItem('%d' % (row + 1)))
+    return table
+
+
+def test_drag_that_leaves_the_tool_table_unblocks_its_signals():
+    table = tool_table()
+    edits = []
+    table.itemChanged.connect(edits.append)
+
+    table.dragEnterEvent(DragFromTable(table))
+    assert table.signalsBlocked()
+    table.dragLeaveEvent(QtGui.QDragLeaveEvent())  # the mouse is released outside the table, or Esc
+    table.item(0, 1).setText('0.15')
+
+    assert not table.signalsBlocked()
+    assert edits == [table.item(0, 1)]
+
+
+def test_drag_that_ends_without_a_drop_unblocks_the_signals(monkeypatch):
+    def drag_without_drop(view, supported_actions):
+        view.dragEnterEvent(DragFromTable(view))  # QDrag.exec() returns without a drop or leave event
+
+    monkeypatch.setattr(QtWidgets.QTableWidget, 'startDrag', drag_without_drop)
+    table = tool_table()
+
+    table.startDrag(QtCore.Qt.DropAction.MoveAction)
+
+    assert not table.signalsBlocked()
