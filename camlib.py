@@ -7639,16 +7639,18 @@ class CNCjob(Geometry):
                 gcode += self.doformat(p.linear_code, x=pt[0], y=pt[1], z_cut=z_cut)
 
             # ---------------------------------------------
-            # second half
+            # second half: the tool is at the start point, it goes on along the path
             # ---------------------------------------------
             extra_line = substring(target_linear, 0, (extracut_length * 0.5))
             extra_path = list(extra_line.coords)
 
+            for pt in extra_path[1:]:
+                gcode += self.doformat(p.linear_code, x=pt[0], y=pt[1], z_cut=z_cut)
+
             # ---------------------------------------------
-            # back to original start point, cutting
+            # back to original start point, cutting (the same way back)
             # ---------------------------------------------
-            extra_line = substring(target_linear, 0, (extracut_length * 0.5))
-            extra_path = list(extra_line.coords)[::-1]
+            extra_path = extra_path[::-1]
 
             # start cutting the extra line
             last_pt = extra_path[0]

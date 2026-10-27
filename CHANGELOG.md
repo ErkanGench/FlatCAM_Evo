@@ -64,6 +64,7 @@ Drilling:
 Milling:
 
 - fixed: every tool with a Custom offset was cut with the offset of the selected row of the tool table; each tool now uses its own offset value
+- fixed: Extra Cut with a length: after the start point of a closed path the tool went straight to a later point of the path (across a corner, into a small pad) and back, instead of going on along the path; it now goes on along the path and back
 
 Tests:
 
@@ -71,6 +72,7 @@ Tests:
 - test_drilling_gen: the Drilling job is refused for a Travel Z of zero or below and for a Feedrate Z of zero
 - test_drilling_gen: Multi-Depth drilling with a zero or negative depth per pass ends (plugin and Tcl)
 - test_milling_lifecycle: each tool with a Custom offset is cut with its own value (single and multi geometry)
+- test_cncjob_gcode_speed: the Extra Cut goes on along the path after the start point and stays out of the pad
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
