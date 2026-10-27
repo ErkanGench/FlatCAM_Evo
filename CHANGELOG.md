@@ -60,12 +60,14 @@ Main Window:
 
 - fixed: with the Plot Area closed (View -> Toggle Plot Area, Ctrl+F10) and no other tab open, Ctrl+S in the Project tab did not save the project and gave a Critical Error dialog; Ctrl+C, Ctrl+G, Delete and T did the same
 - fixed: Escape did not leave the full screen mode (View -> Toggle FullScreen, Alt+F10); the window stayed full screen without its toolbars
+- fixed: Preferences -> Clear GUI Settings answered with No set the light theme in the GUI settings; with the dark theme, the panels and plots made later in the session got light theme colors
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - new unit tests for the Project tab keys with the Plot Area closed (tests/test_app_history_keys.py)
 - new unit tests for Escape in the full screen mode (tests/test_app_history_keys.py)
+- new unit tests for Clear GUI Settings answered with No or Yes (tests/test_theme_color_scheme.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

@@ -2582,11 +2582,6 @@ class MainGUI(QtWidgets.QMainWindow):
         """
         self.app.log.debug("Clearing the settings in QSettings. GUI settings cleared.")
 
-        theme_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        theme_settings.setValue('theme', 'light')
-
-        del theme_settings
-
         response = None
         bt_yes = None
         if forced_clear is False:
@@ -2610,6 +2605,7 @@ class MainGUI(QtWidgets.QMainWindow):
             q_settings = QSettings("Open Source", "FlatCAM_EVO")
             for key in q_settings.allKeys():
                 q_settings.remove(key)
+            q_settings.setValue('theme', 'light')
             # This will write the setting to the platform specific storage.
             del q_settings
 
