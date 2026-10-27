@@ -15,12 +15,14 @@ from PyQt6 import QtCore
 
 import appCommon.RegisterFileKeywords as rfk
 from appCommon.RegisterFileKeywords import RegisterFK
+from defaults import AppDefaults
 
 if not hasattr(builtins, "_"):
     builtins._ = lambda s: s
 
 
 class FakeWinreg:
+    HKEY_CLASSES_ROOT = "HKCR"
     HKEY_CURRENT_USER = "HKCU"
     HKEY_LOCAL_MACHINE = "HKLM"
     KEY_WRITE = 2
@@ -156,6 +158,31 @@ class TestFileAssociations(unittest.TestCase):
         self.assertIsNone(self.val("Software\\Classes\\.gbr"))
         self.assertEqual(self.val("Software\\Classes\\.drl"), "FlatCAM")
 
+    def test_first_run_leaves_the_extensions_of_other_programs(self):
+        # HKEY_CLASSES_ROOT: the merged view of HKCU and HKLM; .gbr was registered by an older FlatCAM
+        self.fake.keys[("HKCR", ".nc")] = "OtherApp.File"
+        self.fake.keys[("HKCR", ".gbr")] = "FlatCAM"
+        reg = first_start()
+        self.assertIsNone(self.val("Software\\Classes\\.nc"))
+        for ext in ("drl", "gbr", "gtl"):
+            self.assertEqual(self.val("Software\\Classes\\.%s" % ext), "FlatCAM")
+        # Apply is the user's choice: it takes the extension
+        reg.on_register_files("gcode")
+        self.assertEqual(self.val("Software\\Classes\\.nc"), "FlatCAM")
+
+    def test_c_header_and_preprocessed_c_are_not_associated_by_default(self):
+        default = AppDefaults.factory_defaults["fa_gcode"].replace(" ", "").split(",")
+        self.reg.gcode_list = rfk.Extensions.gcode_list
+        self.reg.ui.util_pref_form.fa_gcode_group.gco_list_text = ListText()
+        self.reg.restore_extensions("gcode")
+        restored = self.reg.ui.util_pref_form.fa_gcode_group.gco_list_text.get_value().replace(" ", "").split(",")
+        for exts in (default, restored):
+            self.assertNotIn("h", exts)
+            self.assertNotIn("i", exts)
+            self.assertIn("tap", exts)
+        # a .h or .i G-code file still opens (drop on the plot area, file dialog)
+        self.assertIn("h", rfk.Extensions.gcode_list)
+
 
 class FakeHome(unittest.TestCase):
     """A fake home folder and fake system tools: nothing outside the temp folder is touched or run."""
@@ -264,6 +291,12 @@ class TestMacAssociations(FakeHome):
         self.assertIn("flatcam.py", content)
         self.assertTrue(self.called(self.ls, "-f", self.bundle))
         self.assertTrue(self.called("duti", "-s", "org.flatcam.evo", ".gbr", "all"))
+        self.assertTrue(self.called("duti", "-s", "org.flatcam.evo", "org.flatcam.evo.project", "all"))
+
+    def test_first_run_does_not_make_flatcam_the_default_program(self):
+        first_start()
+        self.assertEqual(self.info()["FlatCAMAssociations"]["gerber"], ["gbr", "gtl"])
+        self.assertFalse([cmd for cmd in self.calls if cmd[0] == "duti" and cmd[3].startswith(".")])
         self.assertTrue(self.called("duti", "-s", "org.flatcam.evo", "org.flatcam.evo.project", "all"))
 
     def test_unregister_last_type_removes_bundle(self):
