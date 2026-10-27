@@ -60,12 +60,14 @@ Tcl:
 
 - fixed: drillcncjob without -startz (and without a Start Z in the Preferences) used the Travel Z of the Preferences as the Start Z, so the first tool change was made at that height instead of -toolchangez and, without toolchange, the first travel was made at it instead of -travelz; there is now no start Z move, as in the Drilling plugin
 - fixed: a drillcncjob job with toolchange kept its tools in the order of the Excellon object, not in the order they are drilled; when a bigger tool had a lower number (or with the spot drilling pass) the exported G-code had the end code in the middle, ended with the spindle on and had the spot pass at the end; the tools are now kept in the order they are drilled
+- fixed: export_gcode returned only the G-code that the job keeps for itself, without the start code; for a multi-tool job of the Milling tool this is only the last tool, so a script that wrote the result to a file lost the first tools and the start block; it now returns the text that write_gcode writes to a file
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - new unit tests for the heights of the first tool change and the first travel of drillcncjob without -startz (tests/test_tcl_drillcncjob.py)
 - new unit test for the order of the tools of a drillcncjob job (tests/test_tcl_drillcncjob.py)
+- new unit test for the text that the Tcl export_gcode returns, the same as the file of write_gcode (tests/test_tcl_audit_contracts.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
