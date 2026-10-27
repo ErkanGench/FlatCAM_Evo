@@ -171,6 +171,17 @@ def test_the_tools_are_drilled_in_the_order_asked(order, expected):
     assert re.findall(r'^T(\d+)$', code, re.M) == expected
 
 
+def test_the_tools_of_the_job_are_in_the_order_they_are_drilled():
+    # T1 is bigger than T2: T2 is drilled first, after the spot pass (T3). The export (CNCJobObject.export_gcode())
+    # joins the G-code of the tools in the order of job.tools: the end code was in the middle of the file, the file
+    # ended with the spindle on and the spot pass was the last one
+    tools = {1: (1.0, [(5.0, 5.0)], (), {}), 2: (0.4, [(1.0, 1.0)], (), {})}
+    __, job, code = run(tools, ['-toolchange', 1, '-spot', 1])
+    exported = ''.join(tool['gcode'] for tool in job.tools.values())
+    assert [t for t, __ in blocks(exported)] == [3, 2, 1]
+    assert job.gc_start + exported == code
+
+
 def test_toolchange_argument_turns_the_toolchange_on_and_off():
     assert 'M6' in run(TWO, ['-toolchange', 1])[2]
     assert 'M6' not in run(TWO, ['-toolchange', 0], options=dict(tools_drill_toolchange=True))[2]
