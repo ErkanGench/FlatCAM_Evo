@@ -302,3 +302,72 @@ def test_excellon_in_place_apply_keeps_identity_options_and_tool_data(app):
     assert tuple(source.obj_options[k] for k in BOUNDS_KEYS) == pytest.approx(edited.bounds())
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# the G-code Editor (CNCJob): its closed tab
+# ---------------------------------------------------------------------------------------------------------------
+
+def plot_area_with_code_tabs(app_stub, click):
+    """
+    A real Plot Area with the Plot Area, a Code Review and the G-code Editor tab, connected as in the app: closing a
+    tab runs App.on_plot_area_tab_closed(), which exits the G-code Editor with the answer `click`.
+    """
+    from types import MethodType
+    from PyQt6 import QtWidgets
+    from appGUI.GUIElements import FCDetachableTab2
+    from appHandlers.appUIActions import AppUIActions
+
+    tabs = FCDetachableTab2()
+    for name in ('plot_area_tab', 'code_editor_tab', 'gcode_editor_tab'):
+        page = QtWidgets.QWidget()
+        page.setObjectName(name)
+        tabs.addTab(page, name)
+    app_stub.ui.plot_tab_area = tabs
+    app_stub.ui_actions = AppUIActions(app_stub)
+    app_stub.on_editing_finished = lambda *args, **kwargs: finish(app_stub, click)
+    # connected as in App: PyQt gives the slot the arguments of the signal that it takes
+    tabs.tab_closed_signal.connect(MethodType(App.on_plot_area_tab_closed, app_stub))
+    app_stub.call_source = 'gcode_editor'
+
+    # leaving the editor (update_fcgcode() for Yes, _deactivate_editor() for No) sets call_source back to 'app'
+    def leave(*args):
+        app_stub.call_source = 'app'
+    app_stub.gcode_editor.update_fcgcode.side_effect = leave
+    app_stub._deactivate_editor.side_effect = leave
+    return tabs, [tabs.widget(idx) for idx in range(tabs.count())]
+
+
+def deleted(widget):
+    from PyQt6 import sip
+    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    return sip.isdeleted(widget)
+
+
+@pytest.mark.parametrize('use_tab_x, click', [(False, 'Yes'), (True, 'No')])
+def test_cncjob_editor_exit_deletes_its_closed_tab(use_tab_x, click):
+    # the editor makes a new tab (an AppTextEditor with the whole G-code) in each session; the closed tab was only
+    # removed (removeTab() keeps the widget), so each session kept one more copy of the G-code in memory
+    app_stub, _obj = editor_app('cncjob')
+    tabs, (plot_page, review_page, editor_page) = plot_area_with_code_tabs(app_stub, click)
+    if use_tab_x:
+        tabs.closeTab(2)
+    else:
+        finish(app_stub, click)
+    assert app_stub.call_source == 'app'
+    assert [tabs.widget(idx) for idx in range(tabs.count())] == [plot_page, review_page]
+    assert deleted(editor_page)
+    assert not deleted(plot_page) and not deleted(review_page)
+
+
+def test_closed_code_review_tab_is_deleted_but_not_the_tab_of_an_editor_still_open():
+    app_stub, _obj = editor_app('cncjob')
+    tabs, (plot_page, review_page, editor_page) = plot_area_with_code_tabs(app_stub, 'Yes')
+    # the Code Review of a CNC job makes a new tab each time too
+    tabs.closeTab(1)
+    assert deleted(review_page)
+    # the editor did not exit (on_editing_finished() returned before the exit): its widget is still used
+    app_stub.on_editing_finished = Mock()
+    tabs.closeTab(1)
+    assert app_stub.call_source == 'gcode_editor'
+    assert not deleted(editor_page) and not deleted(plot_page)
+
+
