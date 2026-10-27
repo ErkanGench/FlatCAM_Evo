@@ -1,4 +1,5 @@
 """The Preferences form shows and saves the project keys of the active project, and the values it keeps valid."""
+import builtins
 import os
 import sys
 import unittest
@@ -12,6 +13,7 @@ from PyQt6 import QtCore, QtWidgets
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 from appGUI.preferences.PreferencesUIManager import PreferencesUIManager
 from appGUI.preferences.general.GeneralGUIPrefGroupUI import GeneralGUIPrefGroupUI
+from appHandlers.appUIActions import AppUIActions
 from defaults import AppDefaults, AppOptions
 
 
@@ -97,6 +99,39 @@ class TestPreferencesProjectKeys(unittest.TestCase):
             manager.preferences_changed_flag = True
             manager.show_preferences_gui()
         self.assertEqual(manager.defaults_form_fields['gerber_bboxmargin'].value, 0.9)
+
+
+class TestPreferencesClose(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_closing_with_the_toggle_asks_and_drops_unsaved_edits(self):
+        manager, defaults, _options = make_manager()
+        manager.ui = MagicMock(app=manager.ui.app)
+        manager.ui.app.resource_location = 'assets/resources'
+        manager.ui.pref_tab_area.count.return_value = 0
+        manager.ignore_tab_close_event = False
+        manager.inform = Mock()
+        defaults['global_gridx'] = 2.0
+        tabs = QtWidgets.QTabWidget()
+        self.addCleanup(tabs.deleteLater)
+        tabs.addTab(QtWidgets.QWidget(), builtins._('Preferences'))
+        actions = SimpleNamespace(ui=SimpleNamespace(plot_tab_area=tabs, pref_status_label=Mock()), log=Mock(),
+                                  app=SimpleNamespace(preferencesUiManager=manager))
+        manager.defaults_form_fields['global_gridx'].value = 9.0    # edited, not saved
+        manager.preferences_changed_flag = True
+        dialog = MagicMock()
+        dialog.addButton.side_effect = [object(), object()]    # 'Yes', 'No'; the answer is not 'Yes'
+        with patch('appGUI.preferences.PreferencesUIManager.FCMessageBox', return_value=dialog), \
+                patch.object(PreferencesUIManager, 'init_preferences_gui'), \
+                patch.object(PreferencesUIManager, 'pref_connect'), \
+                patch.object(PreferencesUIManager, '_PreferencesUIManager__init_color_pickers'):
+            AppUIActions.on_toggle_preferences(actions)
+            dialog.exec.assert_called_once()
+            self.assertEqual(tabs.count(), 0)
+            manager.show_preferences_gui()    # opened again
+        self.assertEqual(manager.defaults_form_fields['global_gridx'].value, 2.0)
 
 
 class TestPreferencesColors(unittest.TestCase):

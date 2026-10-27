@@ -61,6 +61,7 @@ Preferences:
 - fixed: after a fill colour typed with 6 digits (#FF0000) was saved, the Preferences did not open any more (an error dialog at each try, also after a restart); a colour without a readable alpha now opens with an opaque or the factory alpha, a 6-digit colour is saved with the alpha of the saved colour, and a text that is not a colour keeps the saved colour
 - fixed: choosing the left to right selection fill colour (Preferences -> General -> GUI) stored only its alpha ('bf'); each selection box then failed with an error, and when the Preferences were closed with 'No' (or left open) the value was saved at the exit and the Preferences did not open after a restart; the chosen colour is now stored with its alpha
 - fixed: each opening of the Preferences set the right to left selection transparency to the left to right one, and changed the right to left selection colours without a notice; the slider now shows the right to left alpha
+- fixed: closing the Preferences with the Preferences button of the status bar did not ask to save the edits and kept them in the form; a later Save of another value stored them too (for example a mistyped Cut Z); the button now closes the Preferences as the close button of the tab does, with the same question
 
 Tests:
 
@@ -68,6 +69,7 @@ Tests:
 - test_preferences_project_keys: colours without a readable alpha do not stop the Preferences; a 6-digit colour is saved with the stored alpha
 - test_preferences_project_keys: the selection fill colour is stored with its alpha
 - test_preferences_project_keys: opening the Preferences keeps the right to left selection alpha
+- test_preferences_project_keys: closing the Preferences with the status bar button asks to save, and edits not saved are not shown again
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
