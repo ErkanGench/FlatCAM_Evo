@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Cutout:
+
+- fixed: after "Search and Add" or "Pick from DB" the Gaps field and the Generate Geometry button disappeared and the manual buttons showed, while the radio still said Automatic
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- Cutout: a tool added from the search or from the Tools Database keeps the Automatic widgets and shows the widgets of its gap type
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
