@@ -428,3 +428,47 @@ def test_a_job_that_was_not_edited_is_made_again_from_its_tools():
     assert '(PRE)' in job.source_file
     assert job.regenerate_source() is True
     assert not any(c.args[0].startswith('[WARNING]') for c in job.app.inform.emit.call_args_list)
+
+
+# ------------------------------------------------------------------------------------------------------------
+# 'Use CNC Code Snippets' unchecked: no prepend / append snippet in the G-code
+# ------------------------------------------------------------------------------------------------------------
+
+PRE, POST = '(PREPEND: G28 home)', '(APPEND: M30)'
+
+
+def test_no_snippets_in_the_gcode_while_the_snippets_checkbox_is_off():
+    job = _ui_job(_ui_app(cncjob_prepend=PRE, cncjob_append=POST))
+    assert job.ui.snippets_cb.get_value() is True and PRE in job.source_file and POST in job.source_file
+
+    # before: an empty snippet was replaced by the one of the Preferences, so they stayed
+    job.ui.snippets_cb.set_value(False)
+    assert PRE not in job.source_file and POST not in job.source_file and BODY in job.source_file
+    # a move, in a worker: snippets_enabled is the state of the box
+    assert job.regenerate_source() is True
+    assert PRE not in job.source_file and POST not in job.source_file
+    job.ui.snippets_cb.set_value(True)
+    assert PRE in job.source_file and POST in job.source_file
+
+    # a job of an opened project made without snippets, now that the Preferences have snippets
+    made = _ui_job(_ui_app())
+    entry = made.to_dict()
+
+    def open_init(new_job):
+        new_job.from_dict(entry)
+        new_job.is_loaded_from_project = True
+
+    opened = _ui_job(_ui_app(cncjob_prepend=PRE, cncjob_append=POST), open_init)
+    assert opened.ui.snippets_cb.get_value() is False and opened.source_file == made.source_file
+
+
+def test_view_source_and_tcl_write_gcode_still_use_the_snippets_of_the_preferences(tmp_path):
+    job = _ui_job(_ui_app(cncjob_prepend=PRE, cncjob_append=POST))
+    job.ui.snippets_cb.set_value(False)
+
+    # App.on_view_source() and the Tcl write_gcode without -preamble / -postamble
+    text = job.export_gcode(to_file=True).getvalue()
+    assert PRE in text and POST in text
+    job.export_gcode(str(tmp_path / 'tcl.nc'), '', '', from_tcl=True)
+    text = (tmp_path / 'tcl.nc').read_text()
+    assert PRE in text and POST in text

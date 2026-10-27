@@ -621,6 +621,10 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             # by being 'serr_attrs' attributes
             pass
 
+        # as the snippets checkbox is set below: a job of an opened project that was made without snippets does not
+        # get the snippets that the Preferences have now
+        use_snippets = self.append_snippet != '' or self.prepend_snippet != ''
+
         if self.edited_source_file:
             # the G-code saved in the G-code Editor is kept: set_ui() runs again when the Properties panel is made
             # again, and for the objects of an opened project (the edited G-code comes with the project)
@@ -630,7 +634,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             self.source_file = self.gcode
         else:
             gc = self.export_gcode(preamble=self.prepend_snippet, postamble=self.append_snippet, to_file=True,
-                                   s_code=self.gc_start)
+                                   s_code=self.gc_start, default_snippets=use_snippets)
 
             # set the Source File attribute with the calculated GCode
             try:
@@ -640,7 +644,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                 # gc is text
                 self.source_file = gc
 
-        if not self.gcode_imported and (self.append_snippet != '' or self.prepend_snippet != ''):
+        if not self.gcode_imported and use_snippets:
             # the source_file is made above, with the snippets: no on_update_source_file() (it would make the G-code
             # again and ask about the G-code saved in the G-code Editor) and no history step
             self.ui.snippets_cb.blockSignals(True)
@@ -863,7 +867,8 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             if self.gcode_imported:
                 text = self.imported_text(preamble, postamble)
             else:
-                gco = self.export_gcode(preamble=preamble, postamble=postamble, to_file=True, s_code=self.gc_start)
+                gco = self.export_gcode(preamble=preamble, postamble=postamble, to_file=True, s_code=self.gc_start,
+                                        default_snippets=self.snippets_enabled)
                 text = gco.getvalue() if hasattr(gco, 'getvalue') else gco
         except Exception as err:
             self.app.log.warning("CNCJobObject.regenerate_source() failed, the old source_file is kept: %s" % str(err))
@@ -924,7 +929,9 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             # the original text, with the snippets only when the checkbox is checked
             text = self.imported_text(preamble, postamble)
         else:
-            gco = self.export_gcode(preamble=preamble, postamble=postamble, to_file=True)
+            # unchecked: no snippet at all (an empty one is not replaced by the snippet of the Preferences)
+            gco = self.export_gcode(preamble=preamble, postamble=postamble, to_file=True,
+                                    default_snippets=self.snippets_enabled)
             if gco == 'fail':
                 self.app.inform.emit(
                     '[ERROR_NOTCL] %s %s...' % (_('Failed.'), _('CNC Machine Code could not be updated')))
@@ -1071,7 +1078,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             return 'M02'
 
     def export_gcode(self, filename=None, preamble='', postamble='', to_file=False, from_tcl=False, glob_gcode='',
-                     s_code=''):
+                     s_code='', default_snippets=True):
         """
         This will save the GCode from the Gcode object to a file on the OS filesystem
 
@@ -1081,6 +1088,8 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         :param to_file:     if False then no actual file is saved but the app will know that a file was created
         :param from_tcl:    True if run from Tcl Shell
         :param glob_gcode:  Passing an object attribute that is used to hold GCode; string
+        :param default_snippets:    True: an empty preamble / postamble is replaced by the snippet of the Preferences;
+                                    False: an empty one means no snippet (the 'Use CNC Code Snippets' checkbox is off)
         :return:            None
         """
 
@@ -1093,9 +1102,9 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         start_code = self.gc_start if s_code == '' else s_code
         include_header = True
 
-        if preamble == '':
+        if preamble == '' and default_snippets:
             preamble = self._app_option("cncjob_prepend")
-        if postamble == '':
+        if postamble == '' and default_snippets:
             postamble = self._app_option("cncjob_append")
 
         # try:
