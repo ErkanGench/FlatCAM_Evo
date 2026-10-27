@@ -423,6 +423,60 @@ def test_first_corner_of_a_rectangle_is_the_clicked_point():
     assert app.exc_areas.exclusion_areas_storage[0]['shape'].bounds == (7.0, 25.0, 27.0, 35.0)
 
 
+def px(x, y):
+    """The pixel of the model point (x, y) on the canvas of drawing_app()."""
+    return (x + 3.0) * 10.0, (40.0 - y) * 10.0
+
+
+def escape(app, monkeypatch):
+    from PyQt6 import QtCore, QtWidgets
+    from appGUI.MainGUI import MainGUI
+
+    monkeypatch.setattr(QtWidgets.QApplication, 'keyboardModifiers',
+                        staticmethod(lambda: QtCore.Qt.KeyboardModifier.NoModifier))
+    MainGUI.keyPressEvent(SimpleNamespace(app=app), SimpleNamespace(key='Escape', native=SimpleNamespace()))
+    # the drawing ended: the mouse events are back with the app
+    assert app.call_source == 'app'
+    app.plotcanvas.graph_event_disconnect.assert_any_call('mouse_release', app.exc_areas.on_mouse_release)
+    app.plotcanvas.graph_event_connect.assert_any_call('mouse_release', app.on_mouse_click_release_over_plot)
+
+
+def test_escape_during_a_rectangle_keeps_the_added_areas(monkeypatch):
+    # 1.0: Escape called area_disconnect() of the active object (AttributeError), and area_disconnect() emptied the
+    # stored areas while they stayed drawn
+    app = drawing_app(active=SimpleNamespace(kind='excellon'))
+    modified = []
+    app.exc_areas.e_shape_modified.connect(lambda: modified.append(True))
+    for point in ((0, 0), (2, 3), (10, 10)):        # an area, then the first corner of the next one
+        click(app, px(*point))
+
+    escape(app, monkeypatch)
+
+    exc = app.exc_areas
+    assert [area['shape'].bounds for area in exc.exclusion_areas_storage] == [pytest.approx((0, 0, 2, 3))]
+    assert modified == [True]
+    # the next drawing starts with a new first corner
+    start_drawing(app)
+    click(app, px(20, 20))
+    click(app, px(22, 21))
+    assert exc.exclusion_areas_storage[1]['shape'].bounds == pytest.approx((20, 20, 22, 21))
+
+
+def test_escape_during_a_polygon_drops_only_the_polygon_being_drawn(monkeypatch):
+    app = drawing_app(shape='polygon')              # no active object
+    for point in ((0, 0), (4, 0), (4, 4)):
+        click(app, px(*point))
+    click(app, px(4, 4), which=2)                   # the polygon is added
+    for point in ((10, 10), (14, 10)):
+        click(app, px(*point))                      # the next polygon is being drawn
+
+    escape(app, monkeypatch)
+
+    exc = app.exc_areas
+    assert [area['shape'].bounds for area in exc.exclusion_areas_storage] == [pytest.approx((0, 0, 4, 4))]
+    assert exc.points == [] and exc.poly_drawn is False
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # OR-Tools route solver size limit
 # ---------------------------------------------------------------------------------------------------------------

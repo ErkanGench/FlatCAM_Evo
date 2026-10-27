@@ -502,8 +502,9 @@ class ExclusionAreas(QtCore.QObject):
 
     def area_disconnect(self):
         """
-        Will do the cleanup. Will disconnect the mouse events for the custom handlers in this class and initialize
-        certain class attributes.
+        Will do the cleanup (Escape while drawing). Will disconnect the mouse events for the custom handlers in this
+        class and drop the area that is being drawn. The areas added before stay: they are drawn on the canvas and
+        the CNC jobs use them.
 
         :return:    None
         :rtype:
@@ -516,13 +517,16 @@ class ExclusionAreas(QtCore.QObject):
         self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
         self.points = []
         self.poly_drawn = False
-        self.exclusion_areas_storage = []
+        # a rectangle started but not finished: the next area starts with a new first corner
+        self.first_click = False
 
         AppTool.delete_moving_selection_shape(self)
         # AppTool.delete_tool_selection_shape(self, shapes_storage=self.exclusion_shapes)
 
         self.app.call_source = "app"
         self.app.inform.emit("[WARNING_NOTCL] %s" % _("Cancelled. Area exclusion drawing was interrupted."))
+        # the exclusion tables of the plugins show the areas added before Escape
+        self.e_shape_modified.emit()
 
     def on_mouse_move(self, event):
         """
