@@ -236,6 +236,65 @@ def test_generated_gcode_keeps_multi_area_clearance(pp_name, strategy):
     assert_safe_clearance(exc, (0, 0), end, travels)
 
 
+# 'Over' never takes the tool below the travel Z: the factory defaults are Over Z 1.0 and Travel Z 2.0, and the G-code
+# went down from Z2 to Z1 over the area. The area x 4..6 is grown to x 3.4..6.6 and crossed by the travel.
+WIDE_AREA = box(4, -2, 6, 8)
+
+
+def drilling_lines(overz, travelz):
+    """The Drilling plugin G-code (excellon_tool_gcode_gen) of the holes (0, 6) and (10, 6), from (0, 0)."""
+    from test_drilling_gen import make_app as make_gen_app, tool_dict
+
+    app = make_gen_app(excellon_search_time=1)
+    app.exc_areas = exclusion_areas(WIDE_AREA)
+    app.exc_areas.exclusion_areas_storage[0].update(overz=overz, owner='drilling')
+    job = CNCjob(app, pp_excellon_name='default')
+    job.obj_options = {'name': 'job', 'type': 'Excellon', 'xmin': 0, 'xmax': 10, 'ymin': 0, 'ymax': 6}
+    job.coords_decimals = 4
+    job.fr_decimals = 2
+    holes = [(0.0, 6.0), (10.0, 6.0)]
+    tools = {1: tool_dict(TOOLDIA, holes, tools_drill_area_exclusion=True, tools_drill_travelz=travelz)}
+    job.tools = {1: {'nr_drills': len(holes)}}
+    job.tool = 1
+    gcode = job.excellon_tool_gcode_gen(1, [Point(h) for h in holes], tools, (0.0, 0.0), is_first=True,
+                                        is_last=True, opt_type='R', exclusion_owner='drilling')[0]
+    return gcode.splitlines()
+
+
+def milling_lines(overz, travelz):
+    """The Milling G-code (linear2gcode) of the path (10, 0) -> (11, 0), from (0, 0)."""
+    job = gcode_job('default')
+    job.app.exc_areas = exclusion_areas(WIDE_AREA)
+    job.app.exc_areas.exclusion_areas_storage[0]['overz'] = overz
+    job.z_move = travelz
+    return job.linear2gcode(LineString([(10, 0), (11, 0)]), TOOLDIA, old_point=(0, 0)).splitlines()
+
+
+def over_the_area(lines, y):
+    i = lines.index('G00 X3.4000 Y%.4f' % y)
+    return lines[i:i + 5]
+
+
+@pytest.mark.parametrize('kind, lines, y', [('drill', drilling_lines, 6), ('mill', milling_lines, 0)],
+                         ids=['drilling', 'milling'])
+def test_default_over_z_never_goes_below_the_travel_z(kind, lines, y):
+    from defaults import AppDefaults
+
+    defaults = AppDefaults.factory_defaults
+    assert defaults['tools_%s_area_strategy' % kind] == 'over'
+    gcode = lines(defaults['tools_%s_area_overz' % kind], defaults['tools_%s_travelz' % kind])
+
+    # 1.0: G00 Z1.0000 after the first line
+    assert over_the_area(gcode, y) == ['G00 X3.4000 Y%.4f' % y, 'G00 Z2.0000', 'G00 X6.6000 Y%.4f' % y,
+                                       'G00 Z2.0000', 'G00 X10.0000 Y%.4f' % y]
+
+
+def test_over_z_above_the_travel_z_is_unchanged():
+    for lines, y in ((drilling_lines, 6), (milling_lines, 0)):
+        assert over_the_area(lines(5.0, 2.0), y) == ['G00 X3.4000 Y%.4f' % y, 'G00 Z5.0000', 'G00 X6.6000 Y%.4f' % y,
+                                                     'G00 Z2.0000', 'G00 X10.0000 Y%.4f' % y]
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Edits of the areas, idx, many travels
 # ---------------------------------------------------------------------------------------------------------------

@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Exclusion areas:
+
+- fixed: with the 'Over' strategy the tool went over an area at its Over Z also when the Over Z was below the travel Z; with the defaults (Over Z 1.0, Travel Z 2.0) the drilling, milling and Tcl G-code moved the tool down from Z2 to Z1 to cross the area; the tool now stays at the travel Z when the Over Z is lower
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- tests/test_exclusion_area_travel.py: the Drilling and Milling travel over an exclusion area never goes below the travel Z
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
