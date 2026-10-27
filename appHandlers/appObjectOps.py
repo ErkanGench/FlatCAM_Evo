@@ -453,6 +453,10 @@ class AppObjectOps(QtCore.QObject):
             x = 0 - pos[0]
             y = 0 - pos[1]
 
+            # 1 click sets the origin 1 time: disconnect now, not when the replot ends seconds later (a second click
+            # would move all the objects again, possibly at the same time in another worker)
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_set_zero_click)
+
             if use_thread is True:
                 self.app.worker_task.emit({'fcn': worker_task, 'params': [self.app]})
             else:
