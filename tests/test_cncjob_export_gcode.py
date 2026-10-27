@@ -8,6 +8,7 @@ code and no drill moves at all.
 """
 
 import importlib
+import os
 import pkgutil
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -231,3 +232,38 @@ def test_gcode_without_tool_data_opens_with_defaults_and_warns_once(tmp_path, co
     warnings = [c.args[0] for c in app.inform.emit.call_args_list
                 if c.args[0].startswith('[WARNING_NOTCL]') and 'tool data' in c.args[0]]
     assert len(warnings) == 1 and '%g' % default in warnings[0] and 'G20/G21' in warnings[0]
+
+
+def test_saving_several_jobs_writes_each_file_in_the_chosen_folder(tmp_path, monkeypatch):
+    # Save in the project context menu with several CNC jobs selected: each file is named after its job, and the
+    # names of a project file can hold a path
+    from appMain import App
+
+    written = []
+
+    class Job:
+        kind = 'cncjob'
+
+        def __init__(self, name):
+            self.obj_options = {'name': name}
+
+        def read_form(self):
+            pass
+
+        def export_gcode_handler(self, filename, is_gcode=True, rename_object=True):
+            written.append(filename)
+
+    names = ['board', '..\\..\\x', '../y', 'C:\\z', 'a:b', 'a_b', 'NUL']
+    folder = tmp_path / 'chosen'
+    app = SimpleNamespace(collection=SimpleNamespace(get_selected=lambda: [Job(name) for name in names]),
+                          options={'cncjob_save_filters': 'G-Code Files .nc (*.nc)'}, defaults={},
+                          get_last_save_folder=lambda: str(tmp_path))
+    monkeypatch.setattr('appMain.FCFileSaveDialog', SimpleNamespace(
+        get_saved_filename=lambda **kwargs: (folder.as_posix() + '/multi_save.nc', '')))
+
+    App.on_project_context_save(app)
+
+    assert [os.path.dirname(os.path.abspath(path)) for path in written] == [os.path.abspath(folder)] * len(names)
+    files = [os.path.basename(path) for path in written]
+    # a plain name is kept; 2 names that become the same file name get 2 files
+    assert files[0] == 'board.nc' and len(set(files)) == len(names)

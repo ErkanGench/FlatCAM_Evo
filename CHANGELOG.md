@@ -60,10 +60,15 @@ Application updater:
 
 - fixed: Import Preferences (File -> Backup) took the update source (provider, GitHub repository, Digi share) from the file, so a received preferences file could point Check for Updates and the updater to another repository; the import now keeps the update source set in Preferences
 
+CNC Job:
+
+- fixed: Save in the project context menu with several CNC jobs selected used the job names as they are for the file names, so a name from a project file such as '..\..\x' wrote the G-code into another folder, over a file with that name; each name is now a plain file name in the chosen folder (the characters that a Windows file name can not hold become '_', a device name such as NUL gets a '_' in front, and 2 names that become the same get 2 files)
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - added a check that Import Preferences keeps the update source
+- added a check that saving several CNC jobs writes each file in the chosen folder
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
