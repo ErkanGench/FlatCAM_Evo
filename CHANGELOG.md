@@ -63,12 +63,14 @@ DXF, SVG and HPGL2 Import:
 CNCJob:
 
 - fixed: Set Origin, Move and Scale of a large CNC job took long and looked hung: the G-code text grew line by line with the decimals options read for each line, and the paths of each tool were joined in a union only for the bounding box (also in Rotate, Mirror and Skew); the text is now joined once and the paths are kept as they are; for 400 000 lines (13.7 MB) a move takes about 2.3 s instead of 11 s, the G-code text is the same
+- fixed: with the autolevelling segment sizes (seg_x / seg_y) set, a long path failed the CNC job with RecursionError (for example a 300 mm line in steps of 0.25 mm), because each new segment point was one more level of recursion; the line is now split in a loop, with the same points
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - tests/test_svg_import.py, tests/test_dxf_import.py, tests/test_gerber_parser.py: the SVG, DXF and HPGL2 import as Geometry with a list of diameters in the "Tools Dia" preference
 - tests/test_geometry_transforms.py: the move and the scale of a native CNC job read the decimals once and keep the paths of the tools for the bounding box
+- tests/test_cncjob_gcode_speed.py: the autolevelling segments of a 300 mm line in steps of 0.25 mm
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

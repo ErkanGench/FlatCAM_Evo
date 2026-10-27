@@ -7233,22 +7233,23 @@ class CNCjob(Geometry):
                 return line[0][dim] + dd * sign, line[0][other] + dd * (line[1][other] - line[0][other]) / d
             return None
 
-        # recursively breaks down a given line until it is within the
-        # required step size
+        # breaks down a given line until it is within the required step size; in a loop, because a recursion (one
+        # level for each new point) failed with RecursionError for a long line and a small step
         def linebreak(line):
-            pt_new = linebreak_single(line, 0, self.seg_x)
-            if pt_new is None:
-                pt_new2 = linebreak_single(line, 1, self.seg_y)
-            else:
-                pt_new2 = linebreak_single((line[0], pt_new), 1, self.seg_y)
-            if pt_new2 is not None:
-                pt_new = pt_new2[::-1]
+            while True:
+                pt_new = linebreak_single(line, 0, self.seg_x)
+                if pt_new is None:
+                    pt_new2 = linebreak_single(line, 1, self.seg_y)
+                else:
+                    pt_new2 = linebreak_single((line[0], pt_new), 1, self.seg_y)
+                if pt_new2 is not None:
+                    pt_new = pt_new2[::-1]
 
-            if pt_new is None:
-                path.append(line[1])
-            else:
+                if pt_new is None:
+                    path.append(line[1])
+                    return
                 path.append(pt_new)
-                linebreak((pt_new, line[1]))
+                line = (pt_new, line[1])
 
         for pt in coords[1:]:
             linebreak((path[-1], pt))
