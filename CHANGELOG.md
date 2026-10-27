@@ -61,11 +61,16 @@ Drilling:
 - fixed: a Travel Z of zero or below made every move between the holes with the bit in or on the material, and a Feedrate Z of zero wrote "G01 F0"; the job is now refused with an error that names the tool (not for the laser preprocessors)
 - fixed: Multi-Depth with a depth per pass of zero never ended and filled the memory (also Tcl drillcncjob -dpp 0); it now drills in one pass, as the milling does, and a negative depth per pass is used as positive
 
+Milling:
+
+- fixed: every tool with a Custom offset was cut with the offset of the selected row of the tool table; each tool now uses its own offset value
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - test_drilling_gen: the Drilling job is refused for a Travel Z of zero or below and for a Feedrate Z of zero
 - test_drilling_gen: Multi-Depth drilling with a zero or negative depth per pass ends (plugin and Tcl)
+- test_milling_lifecycle: each tool with a Custom offset is cut with its own value (single and multi geometry)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
