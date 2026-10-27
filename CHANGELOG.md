@@ -43,6 +43,7 @@ Projects:
 - new: Import... in the project context menu (right-click on the project combobox) opens an Import dialog; the left side lists all the imports in groups (vector files, raster images, PCB boards) with a search box, the right side shows the file type, the created objects and a description; Import... runs the selected import with its own file dialog
 - new: Close All Projects in the project context menu, after a separator below Close Project; each project with unsaved changes asks first, a Cancel or a failed save stops the remaining closes, and 1 empty project stays at the end
 - new: Preferences -> General -> "Project Caching" (off by default); a switch hides the plot shapes of the inactive project instead of releasing them and keeps the plugin widgets, so a switch back does not plot again; a change of the object or the plot options plots the objects again, and closing a project or turning the option off releases the kept shapes
+- fixed: with a Document object in the project, every project save (and autosave) failed with "Failed." and the file was not written: the Document listed an 'options' attribute to save that FlatCAM objects do not have; a Document is now saved and loaded like the other objects
 
 Proteus PCB import:
 
@@ -64,6 +65,7 @@ Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - new unit tests for Replace All of the code editor (tests/test_lazy_highlight.py)
+- new unit test for the project save and load of a Document object (tests/test_object_construction.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
