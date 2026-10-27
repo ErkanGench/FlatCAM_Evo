@@ -200,7 +200,8 @@ class EditorChecks(DatabaseCase):
                 widget.setFocus()
                 widget.selectAll()
                 QTest.keyClicks(widget, text)
-                QTest.keyClick(widget, QtCore.Qt.Key.Key_Tab)
+                # the spinners commit the typed text on Enter or focus out; the test window never gets the focus
+                QTest.keyClick(widget, QtCore.Qt.Key.Key_Return)
                 self.assertEqual(expected, db.db_tool_dict['7']['data'][key])
         for target, key, expected in ((1, 'tools_mill_feedrate', 150.0),
                                       (2, 'tools_drill_spindlespeed', 14000)):

@@ -64,11 +64,16 @@ Tools Database:
 
 - fixed: after an ordinary Preferences Apply, the saved tools were skipped as invalid, so Isolation, Milling, Drilling, NCC, Paint and Cutout added default tools instead of the saved ones; the Apply changes the type of some values ('0.1' becomes 0.1, '0.0, 0.0' becomes (0.0, 0.0), 'no' becomes 0) and each record was checked against the type of the current value; a record value now passes in every form the Preferences give to that key, and a wrong type (a text for a feedrate, an unknown tool order) is still refused
 
+GUI:
+
+- fixed: the number fields committed each prefix of a typed number; a number over the maximum (1500 with a maximum of 1000) left the last prefix in the range (150) in a feed, speed or power field; the typed number is now committed on Enter or when the field loses the focus, and a number out of the range gives back the previous value
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - test_defaults_persistence: a save that fails (a value that cannot be saved, a full disk) keeps the old preferences file and leaves no temporary file
 - test_tools_database: the records saved before and after a Preferences Apply load with the options of both; wrong value types are still skipped
+- test_gui_elements_input (new): a number over the maximum keeps the previous value of a number field and no prefix is committed; the keypad Enter slots get the typed number; test_tools_database commits the typed parameters with Enter
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
