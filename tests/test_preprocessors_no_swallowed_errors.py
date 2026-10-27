@@ -14,6 +14,7 @@ on as if nothing had happened.
     position it raised a TypeError.
   * Roland_MDX_20/540 and hpgl: the plotter units are integers, the feedrate is clamped to the plotter range, and the
     HPGL position is offset, scaled, then clamped.
+  * The Roland plunge is made at the Z feedrate, not at the XY feedrate.
   * ISEL_CNC selects G70 for an inch job; ISEL_ICP_CNC writes the inch z moves and feedrates in micrometres.
   * An inch job drives the same machine position as the mm job (Roland, hpgl, ISEL_ICP_CNC).
   * The end move writes the end X-Y and the end Z in order and lifts before it moves at a low end Z (eleks,
@@ -130,6 +131,16 @@ def test_plotter_units_position_and_feedrate():
     assert pp.position_code(params(x=10.0, y=5.0, _bed_offset_x=5.0)) == 'PA600,200;'
     assert pp.position_code(params(x=1000.0, y=-1000.0)) == 'PA32767,-32768;'
     assert pp.position_code(params(x=800.0, y=5.0, _bed_offset_x=100.0)) == 'PA32767,200;'
+
+
+def test_roland_plunges_at_the_z_feedrate():
+    # the down code set the XY feedrate over the Z feedrate set just before it: the plunge ran at the XY feed
+    for name, res in (('Roland_MDX_20', 40), ('Roland_MDX_540', 100)):
+        pp = PREPROCESSORS[name]
+        p = params(feedrate=600.0, z_feedrate=60.0, z_cut=-0.1)
+        assert pp.down_code(p) == 'V1.0;\nZ%d,%d,%d;' % (res, 2 * res, round(-0.1 * res))
+        # the cut moves keep the XY feedrate
+        assert pp.linear_code(p).startswith('V10.0;\n')
 
 
 def test_isel_units_and_micrometres():
