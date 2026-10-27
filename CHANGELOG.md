@@ -76,6 +76,7 @@ Exclusion areas:
 Tools Database:
 
 - fixed: the Min and Max of the diameter tolerance were free, so a Min typed for a new tool (Max still 0.0) made Save DB fail, and the tab could not be closed or a tool transferred without losing the edits; a Min typed above Max now moves Max up to it, a Max typed below Min moves Min down to it
+- fixed: 'Add Tool in DB' did nothing and showed no message when the Milling "Tools Dia" preference was not a number (for example '0,1a'), and an empty value or 0 gave a Critical Error dialog; it now shows which preference to correct
 
 Tests:
 
@@ -86,6 +87,7 @@ Tests:
 - new unit test for the annotations of a hidden object (tests/test_plot_visibility_toggle.py)
 - tests/test_exclusion_area_travel.py: an exclusion area over the object geometry is the only area removed at the end of the drawing
 - new unit test for the typed Min and Max of the tolerance in the Tools Database (tests/test_tools_database.py)
+- new unit test for 'Add Tool in DB' with a bad Milling "Tools Dia" preference (tests/test_tools_database.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

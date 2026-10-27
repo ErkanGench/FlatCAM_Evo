@@ -2397,16 +2397,22 @@ class ToolsDB2(QtWidgets.QWidget):
 
         dict_elem = {'name': new_name}
         tool_diameter = _database_option(self.app, "tools_mill_tooldia")
-        if isinstance(tool_diameter, (int, float)) and not isinstance(tool_diameter, bool):
-            dict_elem['tooldia'] = tool_diameter
-        else:
-            try:
+        try:
+            if isinstance(tool_diameter, (int, float)) and not isinstance(tool_diameter, bool):
+                tools_diameters = [tool_diameter]
+            else:
                 tools_string = tool_diameter.split(",")
-                tools_diameters = [safe_eval(a) for a in tools_string if a != '']
-                dict_elem['tooldia'] = tools_diameters[0] if tools_diameters else 0.0
-            except Exception as e:
-                self.app.log.error("ToolDB.on_tool_add() --> %s" % str(e))
-                return
+                tools_diameters = [safe_eval(a) for a in tools_string if a.strip() != '']
+            # the first diameter: a number above zero, or normalize_tools_database() below raises
+            dict_elem['tooldia'] = _finite_database_number(tools_diameters[0], 'tools_mill_tooldia')
+            if dict_elem['tooldia'] <= 0:
+                raise ValueError('tools_mill_tooldia: the diameter must be greater than zero')
+        except Exception as e:
+            self.app.log.error("ToolDB.on_tool_add() --> %s" % str(e))
+            # name the preference to correct: without a message the button seemed to do nothing
+            self.app.inform.emit('[ERROR_NOTCL] %s > %s > %s: %s' % (
+                _("Preferences"), _("Milling Plugin"), _("Tools Dia"), _("Wrong value format entered, use a number.")))
+            return
 
         dict_elem['data'] = default_data
         default_data['tool_target'] = self.context_target or self.ui.filter_combo.currentData() or 0

@@ -291,6 +291,22 @@ class EditorChecks(DatabaseCase):
         self.assertTrue(db.on_save_tools_db())
         self.assertEqual([], self.slot_errors)
 
+    def test_add_with_a_bad_milling_tools_dia_preference_shows_a_message(self):
+        # the new tool takes the first diameter of the Milling 'Tools Dia' preference: a text that is not a number
+        # made 'Add Tool in DB' do nothing without a message; an empty text or 0 raised in normalize_tools_database()
+        db = self.database()
+        for text in ('0,1a', '', '0'):
+            with self.subTest(tools_dia=text):
+                self.app.options['tools_mill_tooldia'] = text
+                self.app.inform.reset_mock()
+                db.on_tool_add()
+                self.assertEqual({}, db.db_tool_dict)
+                message = self.app.inform.emit.call_args.args[0]
+                self.assertTrue(message.startswith('[ERROR_NOTCL]') and 'Tools Dia' in message, message)
+        self.app.options['tools_mill_tooldia'] = '0.8, 1.2'
+        db.on_tool_add()
+        self.assertEqual(0.8, db.db_tool_dict['1']['tooldia'])
+
     def test_sqlite_migration_preserves_legacy_and_unknown_fields(self):
         import appDatabase
         source = {'7': record(4), '42': record(2)}
