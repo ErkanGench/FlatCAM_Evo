@@ -8019,7 +8019,8 @@ class CNCjob(Geometry):
         CNCjob._affine_gcode_parsed(list(unique.values()), matrix)
         for v in (self.tools or {}).values():
             if v.get('gcode_parsed'):
-                v['solid_geometry'] = unary_union([geo['geom'] for geo in v['gcode_parsed']])
+                # for the bounding box: the paths as they are (a union of all the paths takes long)
+                v['solid_geometry'] = [geo['geom'] for geo in v['gcode_parsed']]
 
     def gcode_flow_blocked(self, action):
         """
@@ -8096,10 +8097,14 @@ class CNCjob(Geometry):
             :return:  scaled gcode string
             """
 
-            temp_gcode = ''
+            # the lines are joined once at the end and the options are read once: a text that grew line by line
+            # and the option reads for each line were slow for a large job
+            temp_gcode = []
             header_start = False
             header_stop = False
             units = self.app.app_units.upper()
+            coords_decimals = self._app_option("cncjob_coords_decimals")
+            fr_decimals = self._app_option("cncjob_fr_decimals")
 
             lines = StringIO(g)
             for line in lines:
@@ -8127,7 +8132,7 @@ class CNCjob(Geometry):
                         for nr in numbers_in_header:
                             new_nr = float(nr) * xfactor
                             # replace the updated string
-                            line = line.replace(nr, ('%.*f' % (self._app_option("cncjob_coords_decimals"), new_nr))
+                            line = line.replace(nr, ('%.*f' % (coords_decimals, new_nr))
                                                 )
 
                 # this scales all the X and Y and Z and F values and also the Tool Dia in the toolchange message
@@ -8147,7 +8152,7 @@ class CNCjob(Geometry):
                             # replace the updated string
                             line = line.replace(
                                 match_x.group(1),
-                                'X%.*f' % (self._app_option("cncjob_coords_decimals"), new_x)
+                                'X%.*f' % (coords_decimals, new_x)
                             )
                     # find the Y group
                     match_y = self.g_y_re.search(line)
@@ -8156,7 +8161,7 @@ class CNCjob(Geometry):
                             new_y = float(match_y.group(1)[1:]) * yfactor
                             line = line.replace(
                                 match_y.group(1),
-                                'Y%.*f' % (self._app_option("cncjob_coords_decimals"), new_y)
+                                'Y%.*f' % (coords_decimals, new_y)
                             )
                     # find the Z group
                     match_z = self.g_z_re.search(line)
@@ -8165,7 +8170,7 @@ class CNCjob(Geometry):
                             new_z = float(match_z.group(1)[1:]) * xfactor
                             line = line.replace(
                                 match_z.group(1),
-                                'Z%.*f' % (self._app_option("cncjob_coords_decimals"), new_z)
+                                'Z%.*f' % (coords_decimals, new_z)
                             )
 
                     # find the F group
@@ -8175,7 +8180,7 @@ class CNCjob(Geometry):
                             new_f = float(match_f.group(1)[1:]) * xfactor
                             line = line.replace(
                                 match_f.group(1),
-                                'F%.*f' % (self._app_option("cncjob_fr_decimals"), new_f)
+                                'F%.*f' % (fr_decimals, new_f)
                             )
                     # find the T group (tool dia on toolchange)
                     match_t = self.g_t_re.search(line)
@@ -8184,13 +8189,13 @@ class CNCjob(Geometry):
                             new_t = float(match_t.group(1)[1:]) * xfactor
                             line = line.replace(
                                 match_t.group(1),
-                                '= %.*f' % (self._app_option("cncjob_coords_decimals"), new_t)
+                                '= %.*f' % (coords_decimals, new_t)
                             )
 
-                temp_gcode += line
+                temp_gcode.append(line)
             lines.close()
             # header_stop = False
-            return temp_gcode
+            return ''.join(temp_gcode)
 
         if self.multitool is False:
             # offset Gcode
@@ -8209,8 +8214,8 @@ class CNCjob(Geometry):
                 # scale gcode_parsed
                 CNCjob._affine_gcode_parsed(v['gcode_parsed'], affine_scale_matrix(xfactor, yfactor, (px, py)))
 
-                g_code_geos: list[BaseGeometry | MultiPolygon] = [geo['geom'] for geo in v['gcode_parsed']] # noqa
-                v['solid_geometry'] = unary_union(g_code_geos)
+                # for the bounding box: the paths as they are (a union of all the paths takes long)
+                v['solid_geometry'] = [geo['geom'] for geo in v['gcode_parsed']]
         self.create_geometry()
         self.app.proc_container.new_text = ''
 
@@ -8242,7 +8247,10 @@ class CNCjob(Geometry):
             :return:  offseted gcode string
             """
 
-            temp_gcode = ''
+            # the lines are joined once at the end and the option is read once: a text that grew line by line and
+            # the option reads for each line were slow for a large job
+            temp_gcode = []
+            coords_decimals = self._app_option("cncjob_coords_decimals")
             lines = StringIO(g)
             for line in lines:
                 # find the X group
@@ -8254,7 +8262,7 @@ class CNCjob(Geometry):
                         # replace the updated string
                         line = line.replace(
                             match_x.group(1),
-                            'X%.*f' % (self._app_option("cncjob_coords_decimals"), new_x)
+                            'X%.*f' % (coords_decimals, new_x)
                         )
                 match_y = self.g_y_re.search(line)
                 if match_y:
@@ -8262,11 +8270,11 @@ class CNCjob(Geometry):
                         new_y = float(match_y.group(1)[1:]) + dy
                         line = line.replace(
                             match_y.group(1),
-                            'Y%.*f' % (self._app_option("cncjob_coords_decimals"), new_y)
+                            'Y%.*f' % (coords_decimals, new_y)
                         )
-                temp_gcode += line
+                temp_gcode.append(line)
             lines.close()
-            return temp_gcode
+            return ''.join(temp_gcode)
 
         if self.multitool is False:
             # offset Gcode
@@ -8316,9 +8324,9 @@ class CNCjob(Geometry):
                         self.app.proc_container.new_text = ''
                         return
 
-                # for the bounding box
+                # for the bounding box: the paths as they are (a union of all the paths takes long)
                 if v.get('gcode_parsed'):
-                    v['solid_geometry'] = unary_union([geo['geom'] for geo in v['gcode_parsed']])
+                    v['solid_geometry'] = [geo['geom'] for geo in v['gcode_parsed']]
 
                 # Show completion per tool
                 self.app.proc_container.update_view_text(' %d%%' % 100)
