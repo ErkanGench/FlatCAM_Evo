@@ -9,6 +9,7 @@ of the last decimal larger than the real gap (0.15996 -> 0.16). The tests build 
 import functools
 import os
 import sys
+import threading
 from copy import deepcopy
 from unittest.mock import MagicMock
 
@@ -217,3 +218,22 @@ def test_standalone_optimal_click_on_the_empty_last_line_of_the_distances(qapp):
     click_line(distances, QtGui.QTextCursor.MoveOperation.End)
     t.on_distances_textb_clicked()
     assert t.ui.locations_sec_textb.toPlainText() == shown
+
+
+def test_standalone_optimal_sets_the_result_entries_in_the_gui_thread(qapp):
+    t = standalone_optimal(gerber_tools(0.2))
+    tasks = []
+    t.app.worker_task.emit.side_effect = tasks.append
+    t.find_minimum_distance()
+    threads = []
+    for entry in (t.ui.result_entry, t.ui.freq_entry):
+        entry.set_value = lambda value, set_value=entry.set_value: (
+            threads.append(threading.current_thread()), set_value(value))
+    worker = threading.Thread(target=tasks[0]['fcn'], args=tasks[0]['params'])
+    worker.start()
+    worker.join()
+    qapp.processEvents()
+    # Qt widgets are not thread-safe: the job set the entries from the worker thread
+    assert threads == [threading.main_thread()] * 2
+    assert 0 < float(t.ui.result_entry.get_value()) < 0.2
+    assert t.ui.freq_entry.get_value() == '1'

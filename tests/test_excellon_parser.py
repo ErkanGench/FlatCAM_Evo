@@ -2,6 +2,8 @@
 import math
 import os
 import sys
+import threading
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -9,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from appParsers.ParseExcellon import Excellon  # noqa: E402
 from camlib import object_circle_steps  # noqa: E402
-from tests.helpers_objects import make_app_0b  # noqa: E402
+from tests.helpers_objects import _headless_qt, make_app_0b  # noqa: F401,E402
 
 
 @pytest.fixture(autouse=True)
@@ -153,3 +155,37 @@ def test_convert_units_moves_holes_and_diameters():
     assert exc.units == 'MM'
     assert dump(exc) == {1: (1.016, [(25.4, 50.8)], [((25.4, 25.4), (50.8, 25.4))])}
     assert len(exc.solid_geometry) == 2
+
+
+@pytest.fixture
+def pcb_wizard(_headless_qt):
+    from appPlugins.ToolPcbWizard import PcbWizard
+
+    app = MagicMock()
+    app.decimals = 4
+    app.resource_location = 'assets/resources'
+    app.options = {}
+    app.defaults = {}
+    tool = PcbWizard(app)
+    tool.set_tool_ui()
+    yield tool
+    tool.deleteLater()
+
+
+def test_pcbwizard_inf_format_is_set_in_the_gui_thread(pcb_wizard, tmp_path, _headless_qt):
+    inf = tmp_path / 'board.inf'
+    inf.write_text("T1 0.8\nT2 1.2\n4.2 format, metric, absolute\n")
+    ui = pcb_wizard.ui
+    threads = []
+    for widget in (ui.units_radio, ui.int_entry, ui.frac_entry):
+        widget.set_value = lambda value, set_value=widget.set_value: (
+            threads.append(threading.current_thread()), set_value(value))
+    # load_inf() runs in the worker thread of the app
+    worker = threading.Thread(target=pcb_wizard.load_inf, args=[str(inf)])
+    worker.start()
+    worker.join()
+    _headless_qt.processEvents()
+    # Qt widgets are not thread-safe: load_inf() set the format fields from the worker thread
+    assert threads and set(threads) == {threading.main_thread()}
+    assert (ui.units_radio.get_value(), ui.int_entry.get_value(), ui.frac_entry.get_value()) == ('METRIC', 4, 2)
+    assert pcb_wizard.tools_from_inf == {1: 0.8, 2: 1.2}

@@ -30,6 +30,8 @@ log = logging.getLogger('base')
 class PcbWizard(AppTool):
 
     file_loaded = QtCore.pyqtSignal(str, str)
+    # (integral digits, fractional digits, units) of the INF file: the form is set in the GUI thread
+    inf_format_loaded = QtCore.pyqtSignal(int, int, str)
 
     def __init__(self, app):
         AppTool.__init__(self, app)
@@ -44,6 +46,8 @@ class PcbWizard(AppTool):
         self.add_object_creation_controls(has_source=False)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
+        # connected once: the slot sets the form of the current self.ui
+        self.inf_format_loaded.connect(self.on_inf_format_loaded)
 
         self.excellon_loaded = False
         self.inf_loaded = False
@@ -223,9 +227,8 @@ class PcbWizard(AppTool):
         tools, formats = parse_inf(inf_file_content)
         self.tools_from_inf.update(tools)
         for self.integral, self.fractional, self.units in formats:
-            self.ui.units_radio.set_value(self.units)
-            self.ui.int_entry.set_value(self.integral)
-            self.ui.frac_entry.set_value(self.fractional)
+            # this runs in a worker thread: the widgets are changed only in the GUI thread
+            self.inf_format_loaded.emit(self.integral, self.fractional, self.units)
 
         if not self.tools_from_inf:
             self.app.inform.emit('[ERROR] %s' %
@@ -241,6 +244,11 @@ class PcbWizard(AppTool):
             self.exc_file_content = exc_f.readlines()
 
         self.file_loaded.emit("excellon", filename)
+
+    def on_inf_format_loaded(self, integral, fractional, units):
+        self.ui.units_radio.set_value(units)
+        self.ui.int_entry.set_value(integral)
+        self.ui.frac_entry.set_value(fractional)
 
     def on_file_loaded(self, signal, filename):
         self.build_ui()
