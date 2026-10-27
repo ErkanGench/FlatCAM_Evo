@@ -60,10 +60,15 @@ Preferences:
 
 - fixed: the preferences file was written in place at each exit and each save; a failure while writing (a full disk, a crash or a power loss) left a cut file, and the next start used the factory values for all the preferences; the file is now written to a temporary file and then replaces the old one, so a failed save keeps the old file and reports the error
 
+Tools Database:
+
+- fixed: after an ordinary Preferences Apply, the saved tools were skipped as invalid, so Isolation, Milling, Drilling, NCC, Paint and Cutout added default tools instead of the saved ones; the Apply changes the type of some values ('0.1' becomes 0.1, '0.0, 0.0' becomes (0.0, 0.0), 'no' becomes 0) and each record was checked against the type of the current value; a record value now passes in every form the Preferences give to that key, and a wrong type (a text for a feedrate, an unknown tool order) is still refused
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - test_defaults_persistence: a save that fails (a value that cannot be saved, a full disk) keeps the old preferences file and leaves no temporary file
+- test_tools_database: the records saved before and after a Preferences Apply load with the options of both; wrong value types are still skipped
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
