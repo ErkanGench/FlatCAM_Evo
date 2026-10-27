@@ -99,6 +99,18 @@ def test_grbl_laser_activation_does_not_reuse_previous_power(pp_name):
         p['laser_min_power'] = 250
 
 
+@pytest.mark.parametrize('pp_name', ['Marlin_laser_FAN_pin', 'Marlin_laser_Spindle_pin', 'Marlin_laser_z'])
+def test_marlin_laser_activation_sends_zero_power(pp_name):
+    # without S Marlin runs M106 at full output (255) and M3 / M4 at its startup power
+    pp = getattr(importlib.import_module('preprocessors.%s' % pp_name), pp_name)()
+    fan = pp_name == 'Marlin_laser_FAN_pin'
+    for laser_on_code in ('M03', 'M04'):
+        on = 'M106' if fan else laser_on_code.replace('0', '')
+        for power, s_word in ((500, 'S255' if fan else 'S500'), (0, 'S0'), (0.0, 'S0'), (None, 'S0')):
+            p = AttrDict(laser_on_code=laser_on_code, spindlespeed=power)
+            assert pp.spindle_code(p) == pp.down_code(p) == '%s %s' % (on, s_word)
+
+
 @pytest.mark.parametrize('pp_name', LASER_PREPROCESSORS)
 def test_the_warning_follows_the_laser_off_lines_of_each_laser_preprocessor(pp_name):
     app, gcode = milling_tool_job(pp_name, 250)
