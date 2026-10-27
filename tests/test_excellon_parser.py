@@ -189,3 +189,29 @@ def test_pcbwizard_inf_format_is_set_in_the_gui_thread(pcb_wizard, tmp_path, _he
     assert threads and set(threads) == {threading.main_thread()}
     assert (ui.units_radio.get_value(), ui.int_entry.get_value(), ui.frac_entry.get_value()) == ('METRIC', 4, 2)
     assert pcb_wizard.tools_from_inf == {1: 0.8, 2: 1.2}
+
+
+def test_pcbwizard_import_uses_the_format_corrected_after_loading(pcb_wizard, tmp_path):
+    # neither file has the format: the form keeps 2:4 INCH until the user corrects it
+    (tmp_path / 'board.drl').write_text("M48\n%\nT1\nX010000Y020000\nM30\n")
+    (tmp_path / 'board.inf').write_text("T1 0.8\n")
+    pcb_wizard.load_excellon(str(tmp_path / 'board.drl'))
+    pcb_wizard.load_inf(str(tmp_path / 'board.inf'))
+    pcb_wizard.ui.units_radio.set_value('METRIC')
+    pcb_wizard.ui.int_entry.set_value(3)
+    pcb_wizard.ui.frac_entry.set_value(3)
+    imported = []
+
+    def new_object(kind, name, initialize, **kwargs):
+        exc = Excellon(make_app_0b())
+        try:
+            result = initialize(exc, pcb_wizard.app)
+        except Exception as err:    # not raised in the slot of the button: PyQt would abort the test run
+            result = err
+        imported.append((result, exc.units, dump(exc)))
+    pcb_wizard.app.app_obj.new_object.side_effect = new_object
+
+    # the file was built with the format of the loading; the second Import parsed the same, exhausted StringIO
+    pcb_wizard.ui.import_button.click()
+    pcb_wizard.ui.import_button.click()
+    assert imported == [(None, 'MM', {1: (0.8, [(10, 20)], [])})] * 2

@@ -69,6 +69,7 @@ Find Optimal:
 PcbWizard Import:
 
 - fixed: loading the INF file set the format fields (units, integral and fractional digits) from the worker thread; they are now set in the GUI thread
+- fixed: Import used the format, units and zeros of the moment both files were loaded, so a correction made after loading was ignored (drills at wrong positions and sizes); a second Import found no geometry. The file is now built at each Import from the current form
 
 Tests:
 
@@ -77,6 +78,7 @@ Tests:
 - test_tool_distance_snap: the Object Distance Measure button shows 0 for touching objects after a pair 3 mm apart
 - test_isolation_optimal_tooldia: a click on the empty last line of the Find Optimal distances
 - test_isolation_optimal_tooldia, test_excellon_parser: Find Optimal and the PcbWizard INF loading set their fields in the GUI thread
+- test_excellon_parser: PcbWizard Import uses the format corrected after loading, also on a second Import
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
