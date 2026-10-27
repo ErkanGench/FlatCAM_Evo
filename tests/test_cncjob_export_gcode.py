@@ -333,3 +333,98 @@ def test_the_gcode_file_is_written_in_one_write(tmp_path):
     assert writes == [len(job.source_file)] * 2
     assert sorted(p.name for p in tmp_path.iterdir()) == ['button.nc', 'tcl.nc']
     assert (tmp_path / 'button.nc').read_text() == (tmp_path / 'tcl.nc').read_text() == job.source_file
+
+
+# ------------------------------------------------------------------------------------------------------------
+# The G-code saved in the G-code Editor is what the job exports, until the user makes the G-code again
+# ------------------------------------------------------------------------------------------------------------
+
+EDIT = '\nM5 (laser off, added in the editor)\n'
+
+
+def _editor_save(job, text):
+    """The save of the G-code Editor (App.on_editing_finished -> AppGCodeEditor.update_fcgcode)."""
+    from appEditors.appGCodeEditor import AppGCodeEditor
+
+    editor = SimpleNamespace(app=job.app, gcode_obj=job, ui=MagicMock(), deactivate=Mock())
+    editor.ui.gcode_editor_tab.code_editor.toPlainText.return_value = text
+    AppGCodeEditor.update_fcgcode(editor, job)
+
+
+def test_gcode_saved_in_the_editor_survives_a_new_panel_the_project_and_undo(tmp_path):
+    from appCommon.ProjectFile import load_project_file, save_project_file
+    from appHandlers.appHistory import object_state, restore_object_state
+    from camlib import dict2obj, geometry_wkt_cache, project_json_default
+
+    job = _ui_job(_ui_app())
+    edited = job.source_file + EDIT
+    _editor_save(job, edited)
+
+    # before: set_ui() made the G-code again from the tools; the panel is made again when Qt deleted it
+    job.set_ui(CNCObjectUI(app=job.app))
+    assert job.source_file == edited
+    assert job.export_gcode_handler(str(tmp_path / 'out.nc'), rename_object=False) is None
+    assert (tmp_path / 'out.nc').read_text() == edited
+
+    # project save and open (appIO.open_project), and the undo of a delete (HistoryManager.rebuild)
+    data = {'objs': [job.to_dict()]}
+    path = str(tmp_path / 'project.FlatPrj')
+    save_project_file(path, data, default=project_json_default(geometry_wkt_cache(data)))
+    entry = load_project_file(path, object_hook=dict2obj)['objs'][0]
+    state = object_state(job)
+
+    def open_init(new_job):
+        new_job.from_dict(entry)
+        new_job.tools = {int(k): v for k, v in new_job.tools.items()}
+        new_job.is_loaded_from_project = True
+
+    def undo_init(new_job):
+        restore_object_state(new_job, state)
+        new_job.is_loaded_from_project = True
+
+    for init in (open_init, undo_init):
+        assert _ui_job(_ui_app(), init).source_file == edited, init.__name__
+
+
+def test_making_the_edited_gcode_again_asks_first_or_says_that_the_edits_are_lost():
+    job = _ui_job(_ui_app())
+    edited = job.source_file + EDIT
+    _editor_save(job, edited)
+    job.prepend_snippet = '(PRE)'
+
+    # the snippets checkbox: No keeps the edits and puts the box back, Yes makes the G-code again
+    job.ask_to_discard_edited_gcode = Mock(return_value=False)
+    job.ui.snippets_cb.set_value(True)
+    assert job.source_file == edited
+    assert job.ui.snippets_cb.get_value() is False and job.snippets_enabled is False
+    job.ask_to_discard_edited_gcode = Mock(return_value=True)
+    job.ui.snippets_cb.set_value(True)
+    assert '(PRE)' in job.source_file and EDIT not in job.source_file
+
+    # a move (Set Origin, Move to Origin): the G-code must follow the new coordinates, the user is told
+    _editor_save(job, edited)
+    job.tools[1]['gcode'] = BODY.replace('X1 ', 'X6 ')
+    assert job.regenerate_source() is True
+    assert 'X6 ' in job.source_file and EDIT not in job.source_file
+    warnings = [c.args[0] for c in job.app.inform.emit.call_args_list if c.args[0].startswith('[WARNING]')]
+    assert len(warnings) == 1 and 'GCode Editor' in warnings[0]
+
+
+def test_a_job_that_was_not_edited_is_made_again_from_its_tools():
+    job = _ui_job(_ui_app())
+    # a save of the editor without a change
+    _editor_save(job, job.source_file)
+    assert job.to_dict().get('edited_source_file', '') == ''
+
+    job.tools[1]['gcode'] = BODY + 'G1 X20\n'
+    job.set_ui(CNCObjectUI(app=job.app))
+    assert 'G1 X20' in job.source_file
+
+    # the snippets checkbox does not ask and a move gives no warning
+    job.ask_to_discard_edited_gcode = Mock()
+    job.prepend_snippet = '(PRE)'
+    job.ui.snippets_cb.set_value(True)
+    job.ask_to_discard_edited_gcode.assert_not_called()
+    assert '(PRE)' in job.source_file
+    assert job.regenerate_source() is True
+    assert not any(c.args[0].startswith('[WARNING]') for c in job.app.inform.emit.call_args_list)

@@ -59,11 +59,13 @@ Circle resolution:
 CNC Job:
 
 - fixed: a G-code save (Save CNC Code, Tcl write_gcode) that failed half way, for example on a full or a removed SD card, left a cut file without its end code under the final name, and any error other than "no such file" or "permission denied" opened the crash dialog; the G-code is now written in 1 write to a temporary file that replaces the file only after a complete write, and the error is shown in the status bar
+- fixed: the changes saved in the G-code Editor were lost without a message: a new Properties panel, an opened project, the undo of a delete and the "Use CNC Code Snippets" checkbox made the G-code again from the tools; the edited G-code is now kept by the job and saved in the project, the checkbox asks before it discards the changes, and a move or an origin change (the G-code must follow the new coordinates) says that they are lost
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - added checks that a failed G-code save keeps the old file and leaves no partial or temporary file, and that the G-code is written in 1 write
+- added checks that the G-code saved in the G-code Editor survives a new Properties panel, a project save and open and the undo of a delete, and that a job that was not edited is made again as before
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

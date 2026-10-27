@@ -10,11 +10,11 @@
 # File modified by: Marius Stanciu                         #
 # ##########################################################
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from appEditors.appTextEditor import AppTextEditor
 from appObjects.AppObjectTemplate import FlatCAMObj, PropertiesPanelMixin, ObjectDeleted
-from appGUI.GUIElements import FCFileSaveDialog, FCCheckBox
+from appGUI.GUIElements import FCFileSaveDialog, FCCheckBox, FCMessageBox
 from appGUI.ObjectUI import CNCObjectUI
 from camlib import CNCjob
 
@@ -215,6 +215,9 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         self.gcode_viewer_tab = None
 
         self.source_file = ''
+        # the G-code as it was saved in the G-code Editor, '' when it was not changed there. While it is set, it is
+        # the source_file: set_ui() (also for an opened project) does not make the G-code again from the tools
+        self.edited_source_file = ''
         self.units_found = self.app.app_units
 
         self.prepend_snippet = ''
@@ -239,7 +242,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         # from predecessors.
         self.ser_attrs += [
             'obj_options', 'multitool', 'append_snippet', 'prepend_snippet', 'gc_header', 'gc_start',
-            'multigeo', 'used_tools', 'gcode_imported', 'gcode_encoding'
+            'multigeo', 'used_tools', 'gcode_imported', 'gcode_encoding', 'edited_source_file'
         ]
 
         # this is used, so we don't recreate the GCode for loaded objects in set_ui(), it is already there
@@ -618,7 +621,11 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             # by being 'serr_attrs' attributes
             pass
 
-        if self.gcode_imported:
+        if self.edited_source_file:
+            # the G-code saved in the G-code Editor is kept: set_ui() runs again when the Properties panel is made
+            # again, and for the objects of an opened project (the edited G-code comes with the project)
+            self.source_file = self.edited_source_file
+        elif self.gcode_imported:
             # the original text; the snippets are added only when the user checks the snippets checkbox
             self.source_file = self.gcode
         else:
@@ -634,9 +641,11 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                 self.source_file = gc
 
         if not self.gcode_imported and (self.append_snippet != '' or self.prepend_snippet != ''):
-            # the object creation is not a history step of its own
-            with history_of(self.app).suspended():
-                self.ui.snippets_cb.set_value(True)
+            # the source_file is made above, with the snippets: no on_update_source_file() (it would make the G-code
+            # again and ask about the G-code saved in the G-code Editor) and no history step
+            self.ui.snippets_cb.blockSignals(True)
+            self.ui.snippets_cb.set_value(True)
+            self.ui.snippets_cb.blockSignals(False)
 
         self.snippets_enabled = bool(self.ui.snippets_cb.get_value())
 
@@ -864,10 +873,46 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             return False
         if not store:
             return text
+        if self.edited_source_file:
+            # the G-code follows the new coordinates; the changes made in the G-code Editor cannot follow them
+            self.app.inform.emit('[WARNING] %s: %s' % (
+                str(self.obj_options.get('name', '')),
+                _("The G-code was made again. The changes made in the GCode Editor are lost.")))
+            self.edited_source_file = ''
         self.source_file = text
         return True
 
+    def ask_to_discard_edited_gcode(self):
+        """
+        Asks before the G-code saved in the G-code Editor is made again from the tools. A method of its own, so a test
+        can replace it.
+
+        :return:    True when the user lets the changes go
+        """
+        msgbox = FCMessageBox(parent=self.app.ui)
+        title = _("GCode Editor")
+        msgbox.setWindowTitle(title)  # taskbar still shows it
+        msgbox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app128.png'))
+        msgbox.setText('<b>%s</b>' % title)
+        msgbox.setInformativeText(_("The G-code was changed in the GCode Editor.\n"
+                                    "Making it again discards these changes.\n\n"
+                                    "Continue?"))
+        msgbox.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+        bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
+        msgbox.setDefaultButton(bt_no)
+        msgbox.exec()
+        return msgbox.clickedButton() == bt_yes
+
     def on_update_source_file(self):
+        if self.edited_source_file and not self.ask_to_discard_edited_gcode():
+            # the G-code saved in the G-code Editor is kept; the checkbox goes back
+            self.ui.snippets_cb.blockSignals(True)
+            self.ui.snippets_cb.set_value(not self.ui.snippets_cb.get_value())
+            self.ui.snippets_cb.blockSignals(False)
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+            return
+
         preamble = ''
         postamble = ''
         self.snippets_enabled = bool(self.ui.snippets_cb.get_value())
@@ -887,6 +932,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             text = gco.getvalue()
         with history_of(self.app).snapshot(_("Update Source File"), [self]):
             self.source_file = text
+            self.edited_source_file = ''
         self.app.inform.emit('[success] %s...' % _('CNC Machine Code was updated'))
 
     def imported_text(self, preamble='', postamble=''):
