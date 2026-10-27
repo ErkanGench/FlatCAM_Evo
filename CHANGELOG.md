@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Application updater:
+
+- fixed: Import Preferences (File -> Backup) took the update source (provider, GitHub repository, Digi share) from the file, so a received preferences file could point Check for Updates and the updater to another repository; the import now keeps the update source set in Preferences
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- added a check that Import Preferences keeps the update source
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
