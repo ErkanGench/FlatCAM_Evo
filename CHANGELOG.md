@@ -59,11 +59,13 @@ Circle resolution:
 Preferences:
 
 - fixed: after a fill colour typed with 6 digits (#FF0000) was saved, the Preferences did not open any more (an error dialog at each try, also after a restart); a colour without a readable alpha now opens with an opaque or the factory alpha, a 6-digit colour is saved with the alpha of the saved colour, and a text that is not a colour keeps the saved colour
+- fixed: choosing the left to right selection fill colour (Preferences -> General -> GUI) stored only its alpha ('bf'); each selection box then failed with an error, and when the Preferences were closed with 'No' (or left open) the value was saved at the exit and the Preferences did not open after a restart; the chosen colour is now stored with its alpha
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - test_preferences_project_keys: colours without a readable alpha do not stop the Preferences; a 6-digit colour is saved with the stored alpha
+- test_preferences_project_keys: the selection fill colour is stored with its alpha
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

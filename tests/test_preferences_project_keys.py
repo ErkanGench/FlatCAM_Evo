@@ -7,9 +7,11 @@ from unittest.mock import MagicMock, Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PyQt6 import QtCore
+from PyQt6 import QtCore, QtWidgets
 
+from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 from appGUI.preferences.PreferencesUIManager import PreferencesUIManager
+from appGUI.preferences.general.GeneralGUIPrefGroupUI import GeneralGUIPrefGroupUI
 from defaults import AppDefaults, AppOptions
 
 
@@ -35,6 +37,18 @@ def make_manager():
     manager.defaults_form_fields = {
         'gerber_bboxmargin': Field(), 'gerber_bboxrounded': Field(), 'global_gridx': Field()}
     return manager, defaults, options
+
+
+def make_group(group_class):
+    """A real Preferences group on a mock App; the options write the application keys to the defaults."""
+    defaults = AppDefaults(beta=False)
+    app = MagicMock(decimals=4, resource_location='assets/resources')
+    app.defaults = defaults
+    app.options = AppOptions(version='test', baseline=defaults, defaults=defaults)
+    with patch.object(OptionsGroupUI, 'app', app):
+        group = group_class(app)
+    group.app = app     # the handlers read OptionsGroupUI.app, which the App sets
+    return group, app, defaults
 
 
 class TestPreferencesProjectKeys(unittest.TestCase):
@@ -86,6 +100,10 @@ class TestPreferencesProjectKeys(unittest.TestCase):
 
 
 class TestPreferencesColors(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
     def test_colours_without_a_readable_alpha_do_not_stop_the_preferences(self):
         manager, defaults, _options = make_manager()
         manager.ui = MagicMock(app=manager.ui.app)
@@ -109,6 +127,13 @@ class TestPreferencesColors(unittest.TestCase):
         self.assertEqual(defaults['excellon_plot_fill'], defaults.factory_defaults['excellon_plot_fill'])
         self.assertEqual(defaults['global_sel_line'], '#00FF0040')
         self.assertEqual(defaults['global_draw_color'], '#FF0000')
+
+    def test_selection_fill_colour_keeps_the_colour_and_its_alpha(self):
+        group, app, _defaults = make_group(GeneralGUIPrefGroupUI)
+        self.addCleanup(group.deleteLater)
+        group.sf_color_entry.set_value('#112233FF')    # as the colour dialog sets it
+        group.sf_color_entry.editingFinished.emit()
+        self.assertEqual(app.options['global_sel_fill'], '#112233bf')
 
 
 if __name__ == '__main__':

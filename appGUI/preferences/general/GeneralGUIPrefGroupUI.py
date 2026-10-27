@@ -593,7 +593,8 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
 
     # Setting selection colors (left - right) handlers
     def on_sf_color_entry(self):
-        self.app.options['global_sel_fill'] = _database_option(self.app, 'global_sel_fill')[7:9]
+        self.app.options['global_sel_fill'] = self.sf_color_entry.get_value()[:7] + \
+            _database_option(self.app, 'global_sel_fill')[7:9]
 
     def on_sl_color_entry(self):
         self.app.options['global_sel_line'] = self.sl_color_entry.get_value()[:7] + \
