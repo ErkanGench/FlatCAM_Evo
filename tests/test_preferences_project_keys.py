@@ -214,5 +214,26 @@ class TestPreferencesColors(unittest.TestCase):
                 self.assertEqual({key: defaults[key] for key in fields}, expected)
 
 
+class TestExcellonPreferences(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_restore_defaults_button_sets_the_factory_format(self):
+        group, app, defaults = make_group(ExcellonGenPrefGroupUI)
+        self.addCleanup(group.deleteLater)
+        fields = {key: getattr(group, key + '_entry') for key in (
+            'excellon_format_upper_in', 'excellon_format_lower_in', 'excellon_format_upper_mm',
+            'excellon_format_lower_mm')}
+        fields.update(excellon_zeros=group.excellon_zeros_radio, excellon_units=group.excellon_units_radio)
+        app.preferencesUiManager.defaults_form_fields = fields
+        group.excellon_zeros_radio.set_value('L')
+        group.excellon_units_radio.set_value('METRIC')
+        group.excellon_format_lower_in_entry.set_value(3)
+        group.excellon_defaults_button.click()
+        self.assertEqual({key: field.get_value() for key, field in fields.items()},
+                         {key: defaults.factory_defaults[key] for key in fields})    # zeros: 'T'
+
+
 if __name__ == '__main__':
     unittest.main()

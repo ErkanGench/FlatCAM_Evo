@@ -402,12 +402,11 @@ class ExcellonGenPrefGroupUI(OptionsGroupUI):
         self.line_color_entry.set_value(self.line_color_entry.get_value()[:7] + alpha)
 
     def on_excellon_defaults_button(self):
-        self.app.preferencesUiManager.defaults_form_fields["excellon_format_lower_in"].set_value('4')
-        self.app.preferencesUiManager.defaults_form_fields["excellon_format_upper_in"].set_value('2')
-        self.app.preferencesUiManager.defaults_form_fields["excellon_format_lower_mm"].set_value('3')
-        self.app.preferencesUiManager.defaults_form_fields["excellon_format_upper_mm"].set_value('3')
-        self.app.preferencesUiManager.defaults_form_fields["excellon_zeros"].set_value('L')
-        self.app.preferencesUiManager.defaults_form_fields["excellon_units"].set_value('INCH')
+        # the factory values: they are the parser fallback for the files without this information in the header
+        factory_defaults = self.app.defaults.factory_defaults
+        for key in ("excellon_format_lower_in", "excellon_format_upper_in", "excellon_format_lower_mm",
+                    "excellon_format_upper_mm", "excellon_zeros", "excellon_units"):
+            self.app.preferencesUiManager.defaults_form_fields[key].set_value(factory_defaults[key])
 
     def on_update_exc_export(self, state):
         """

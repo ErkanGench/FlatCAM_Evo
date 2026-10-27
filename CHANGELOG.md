@@ -63,6 +63,7 @@ Preferences:
 - fixed: each opening of the Preferences set the right to left selection transparency to the left to right one, and changed the right to left selection colours without a notice; the slider now shows the right to left alpha
 - fixed: closing the Preferences with the Preferences button of the status bar did not ask to save the edits and kept them in the form; a later Save of another value stored them too (for example a mistyped Cut Z); the button now closes the Preferences as the close button of the tab does, with the same question
 - fixed: an alpha of 1 to 15 on an alpha slider (Gerber, Excellon, CNC Job travel and selection colours) gave a 7-digit colour that the canvas rejects, so for example a CNC job was not drawn and no message was shown; also, Save or Apply put the old alpha back; the alpha has now always 2 digits and the slider also sets the colour fields that Save stores
+- fixed: the Restore Defaults button of Preferences -> Excellon -> General set the zeros to LZ, while the factory value is TZ; after a Save, the Excellon files with no zeros information in the header and no decimal point (old Eagle files) were read with wrong coordinates, for example 1.25 in as 12.5 in, and drilled at wrong positions; the button now sets the factory values
 
 Tests:
 
@@ -72,6 +73,7 @@ Tests:
 - test_preferences_project_keys: opening the Preferences keeps the right to left selection alpha
 - test_preferences_project_keys: closing the Preferences with the status bar button asks to save, and edits not saved are not shown again
 - test_preferences_project_keys: the alpha sliders give a valid colour that Save keeps
+- test_preferences_project_keys: the Excellon Restore Defaults button sets the factory format and zeros
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
