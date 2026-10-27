@@ -433,3 +433,11 @@ def test_rectangle_panel_keeps_the_size_when_the_corner_radius_does_not_fit():
         assert len(added) == 1
         assert added[0].bounds == pytest.approx((-5, -width / 2, 5, width / 2))
         assert (Polygon(added[0]).area < 10 * width) == rounded
+
+
+def test_circle_panel_adds_a_circle_with_the_y_radius_field_left_at_0():
+    # in the default (linked) circle mode the Y radius field is disabled and does not follow the X field
+    circle = dict(x_entry=10, y_entry=10, radius_y_entry=0, angle_entry=0)
+    added = panel_add(CircleEditorTool, radius_x_entry=5, **circle)
+    assert len(added) == 1 and added[0].bounds == pytest.approx((5, 5, 15, 15))
+    assert panel_add(CircleEditorTool, radius_x_entry=0, **circle) == []
