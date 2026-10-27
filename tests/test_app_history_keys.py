@@ -88,6 +88,52 @@ class TestKeysWithoutPlotArea(unittest.TestCase):
         gui.app.f_handlers.on_file_save_project.assert_not_called()
 
 
+class TestEscapeLeavesFullScreen(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def setUp(self):
+        class Window(QtWidgets.QMainWindow):
+            on_full_screen_toggled = MainGUI.on_full_screen_toggled
+
+        self.window = Window()
+        self.window.app = MagicMock()
+        self.window.app.call_source = 'app'
+        self.window.app.options = {}
+        self.window.app.ui = self.window
+        # as MainGUI.__init__ leaves them
+        self.window.toggle_f_screen = False
+        self.window.x_pos = self.window.y_pos = self.window.titlebar_height = None
+        for name in ('coords_toolbar', 'delta_coords_toolbar', 'grid_toolbar', 'status_toolbar'):
+            setattr(self.window, name, MagicMock())
+        self.toolbar = self.window.addToolBar('File')
+        self.addCleanup(self.window.deleteLater)
+        self.addCleanup(self.window.close)
+        self.window.show()
+        self.qapp.processEvents()
+
+    def press_escape(self):
+        no_modifier = QtCore.Qt.KeyboardModifier.NoModifier
+        with patch.object(QtWidgets.QApplication, 'keyboardModifiers', return_value=no_modifier):
+            MainGUI.keyPressEvent(self.window, int(QtCore.Qt.Key.Key_Escape))
+        self.qapp.processEvents()
+
+    def test_escape_after_alt_f10(self):
+        self.window.on_full_screen_toggled()    # View -> Toggle FullScreen, Alt+F10
+        self.assertTrue(self.window.isFullScreen())
+        self.assertFalse(self.toolbar.isVisible())
+        self.press_escape()
+        self.assertFalse(self.window.isFullScreen())
+        self.assertTrue(self.toolbar.isVisible())
+
+    def test_escape_in_a_normal_window_only_deselects(self):
+        self.press_escape()
+        self.window.app.on_deselect_all.assert_called_once_with()
+        self.assertFalse(self.window.isFullScreen())
+        self.assertTrue(self.toolbar.isVisible())
+
+
 class TestViewKeys(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

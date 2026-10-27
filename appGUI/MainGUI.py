@@ -3649,7 +3649,7 @@ class MainGUI(QtWidgets.QMainWindow):
                     self.app.on_deselect_all()
 
                     # if in full screen, exit to normal view
-                    if self.toggle_f_screen is True:
+                    if self.isFullScreen():
                         self.on_full_screen_toggled(disable=True)
 
                     # try to disconnect the slot from Set Origin
