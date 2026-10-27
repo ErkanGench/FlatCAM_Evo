@@ -61,6 +61,7 @@ Excellon Editor:
 - fixed: the 'Add' button of Drill Array used the size, pitch, direction and angles of the last mouse move over the canvas, not the values in the panel; it now reads the panel, like Slot Array
 - fixed: Drill Array and Slot Array, Circular: a mouse move over the canvas before the center click set the Radius to 0, so the 'Add' button failed with "Invalid array size, angle or radius."; the radius is now shown only after the center click
 - fixed: Copy in the Array mode with the Circular type showed no preview and made no copies, unless a Linear preview was shown before; the circular preview now needs only the reference point
+- fixed: Copy: a typed length (Projection) and Enter stopped with an error; the copy is now made at that distance from the reference point, towards the cursor, and the editor goes back to Select
 
 Tests:
 
@@ -68,6 +69,7 @@ Tests:
 - test_exc_editor_defects: the 'Add' button of Drill Array uses the values changed in the panel after the last mouse move
 - test_exc_editor_defects: a circular Drill Array or Slot Array from the 'Add' button keeps the typed radius after a mouse move over the canvas
 - test_exc_editor_defects: Copy as a circular array shows the preview and makes the copies without an earlier Linear preview
+- test_exc_editor_defects: Copy with a typed length and Enter copies at that distance towards the cursor, and warns without a reference point
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

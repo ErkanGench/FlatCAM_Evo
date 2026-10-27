@@ -2548,8 +2548,12 @@ class CopyEditorExc(FCShapeTool):
                     self.copy_tool.length = 0.0
                     return _("Failed.")
 
-                first_pt = self.points[-1]
-                last_pt = self.draw_app.app.mouse
+                # the copy goes at the typed distance from the reference point, towards the cursor; self.points is
+                # not a position here (it is empty, or the offset of the Linear array preview)
+                if self.origin is None:
+                    return '[WARNING_NOTCL] %s' % _("Click on reference location ...")
+                first_pt = self.origin
+                last_pt = self.draw_app.snap_x, self.draw_app.snap_y
 
                 seg_length = math.sqrt((last_pt[0] - first_pt[0]) ** 2 + (last_pt[1] - first_pt[1]) ** 2)
                 if seg_length == 0.0:
@@ -2562,14 +2566,14 @@ class CopyEditorExc(FCShapeTool):
                     self.clean_up()
                     return '[ERROR_NOTCL] %s %s' % (_("Failed."), str(err).capitalize())
 
-                if self.points[-1] != (new_x, new_y):
-                    self.points.append((new_x, new_y))
-                    self.draw_app.app.on_jump_to(custom_location=(new_x, new_y), fit_center=False)
-                    self.destination = (new_x, new_y)
-                    self.make()
-                    self.draw_app.on_shape_complete()
-                    self.draw_app.select_tool("select")
-                    return "Done."
+                self.draw_app.app.on_jump_to(custom_location=(new_x, new_y), fit_center=False)
+                self.destination = (new_x, new_y)
+                # make() adds and plots the copies and gives the message, as for a click
+                self.make()
+
+                # MS: always return to the Select Tool
+                self.draw_app.select_tool("drill_select")
+                return
 
     def clean_up(self):
         self.draw_app.selected.clear()

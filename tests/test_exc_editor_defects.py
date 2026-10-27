@@ -6,12 +6,13 @@ from types import MethodType, SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from PyQt6 import QtWidgets
+from PyQt6 import QtCore, QtWidgets
 from shapely.affinity import translate
 from shapely.geometry import Point
 
 from appEditors.appExcEditor import AppExcEditor, CopyEditorExc, DrillArray, SlotArray
 from appEditors.appGeoEditor import AppGeoEditor, DrawTool
+from appGUI.MainGUI import MainGUI
 from defaults import AppDefaults
 from test_exc_editor_history import drill, scene
 from tests.helpers_objects import _headless_qt  # noqa: F401,E402
@@ -272,3 +273,29 @@ def test_circular_copy_array_previews_and_copies_without_a_linear_preview_first(
     tool.click((10.0, 0.0))
     assert added_centers(editor) == pytest.approx([10, 0, 0, 10, -10, 0, 0, -10])
     assert len(editor.points_edit[1.0]) == 1 + 4
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# 13. Copy: a typed length + Enter copies at that distance from the reference point
+# ---------------------------------------------------------------------------------------------------------------
+
+def press(editor, key, monkeypatch):
+    """Press a key without modifier in the Excellon editor, through the key handler of the main window."""
+    monkeypatch.setattr(QtWidgets.QApplication, 'keyboardModifiers',
+                        staticmethod(lambda: QtCore.Qt.KeyboardModifier.NoModifier))
+    editor.app.call_source, editor.app.exc_editor, editor.app.collection = 'exc_editor', editor, Mock()
+    gui = SimpleNamespace(app=editor.app, select_drill_btn=SimpleNamespace(isChecked=lambda: False))
+    MainGUI.keyPressEvent(gui, SimpleNamespace(key=key, native=SimpleNamespace()))
+
+
+def test_copy_enter_with_a_typed_length_copies_towards_the_cursor(monkeypatch):
+    editor, tool = copy_tool(mode_radio='n')
+    tool.copy_tool = SimpleNamespace(length=10.0)  # the Projection field: '10' typed on the canvas
+    editor.app.on_jump_to = Mock()
+    editor.snap_x, editor.snap_y = 3.0, 4.0  # the cursor
+    press(editor, 'Enter', monkeypatch)
+    assert warned(editor) and added_centers(editor) == []  # no reference point yet
+    tool.click((0.0, 0.0))
+    press(editor, 'Enter', monkeypatch)
+    assert added_centers(editor) == pytest.approx([6, 8])
+    editor.select_tool.assert_called_with('drill_select')
