@@ -12,7 +12,10 @@ from PyQt6 import QtCore, QtWidgets
 
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 from appGUI.preferences.PreferencesUIManager import PreferencesUIManager
+from appGUI.preferences.cncjob.CNCJobGenPrefGroupUI import CNCJobGenPrefGroupUI
+from appGUI.preferences.excellon.ExcellonGenPrefGroupUI import ExcellonGenPrefGroupUI
 from appGUI.preferences.general.GeneralGUIPrefGroupUI import GeneralGUIPrefGroupUI
+from appGUI.preferences.gerber.GerberGenPrefGroupUI import GerberGenPrefGroupUI
 from appHandlers.appUIActions import AppUIActions
 from defaults import AppDefaults, AppOptions
 
@@ -183,6 +186,32 @@ class TestPreferencesColors(unittest.TestCase):
         self.assertEqual(group.right_left_alpha_entry.get_value(), 0x40)
         self.assertEqual(app.options['global_alt_sel_fill'], '#BBF26840')
         self.assertEqual(app.options['global_alt_sel_line'], '#006E2040')
+
+    def test_alpha_slider_gives_a_valid_colour_that_save_keeps(self):
+        for group_class, slider, fields in (
+                (CNCJobGenPrefGroupUI, 'cncjob_alpha_entry',
+                 {'cncjob_travel_fill': 'tfill_color_entry', 'cncjob_travel_line': 'tline_color_entry'}),
+                (GerberGenPrefGroupUI, 'gerber_alpha_entry',
+                 {'gerber_plot_fill': 'fill_color_entry', 'gerber_plot_line': 'line_color_entry'}),
+                (ExcellonGenPrefGroupUI, 'excellon_alpha_entry',
+                 {'excellon_plot_fill': 'fill_color_entry', 'excellon_plot_line': 'line_color_entry'}),
+                (GeneralGUIPrefGroupUI, 'left_right_alpha_entry',
+                 {'global_sel_fill': 'sf_color_entry', 'global_sel_line': 'sl_color_entry'}),
+                (GeneralGUIPrefGroupUI, 'right_left_alpha_entry',
+                 {'global_alt_sel_fill': 'alt_sf_color_entry', 'global_alt_sel_line': 'alt_sl_color_entry'})):
+            with self.subTest(slider=slider):
+                group, app, defaults = make_group(group_class)
+                self.addCleanup(group.deleteLater)
+                manager = make_manager()[0]
+                manager.defaults = defaults
+                manager.ui = SimpleNamespace(app=app)
+                manager.defaults_form_fields = {key: getattr(group, name) for key, name in fields.items()}
+                manager.defaults_write_form()
+                getattr(group, slider).set_value(10)
+                expected = {key: defaults.factory_defaults[key][:7] + '0a' for key in fields}
+                self.assertEqual({key: app.options[key] for key in fields}, expected)    # the canvas colours
+                manager.defaults_read_form()    # Save
+                self.assertEqual({key: defaults[key] for key in fields}, expected)
 
 
 if __name__ == '__main__':

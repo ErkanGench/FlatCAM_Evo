@@ -393,12 +393,13 @@ class ExcellonGenPrefGroupUI(OptionsGroupUI):
                                                 _database_option(self.app, 'excellon_plot_line')[7:9]
 
     def on_excellon_alpha_changed(self, spinner_value):
-        self.app.options['excellon_plot_fill'] = \
-            _database_option(self.app, 'excellon_plot_fill')[:7] + \
-            (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
-        self.app.options['excellon_plot_line'] = \
-            _database_option(self.app, 'excellon_plot_line')[:7] + \
-            (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
+        # always 2 digits: hex() gave 1 digit for 1..15, a colour that the canvas cannot draw
+        alpha = '%02x' % spinner_value
+        self.app.options['excellon_plot_fill'] = _database_option(self.app, 'excellon_plot_fill')[:7] + alpha
+        self.app.options['excellon_plot_line'] = _database_option(self.app, 'excellon_plot_line')[:7] + alpha
+        # Save stores the colour fields, so they get the alpha too
+        self.fill_color_entry.set_value(self.fill_color_entry.get_value()[:7] + alpha)
+        self.line_color_entry.set_value(self.line_color_entry.get_value()[:7] + alpha)
 
     def on_excellon_defaults_button(self):
         self.app.preferencesUiManager.defaults_form_fields["excellon_format_lower_in"].set_value('4')

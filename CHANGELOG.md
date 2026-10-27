@@ -62,6 +62,7 @@ Preferences:
 - fixed: choosing the left to right selection fill colour (Preferences -> General -> GUI) stored only its alpha ('bf'); each selection box then failed with an error, and when the Preferences were closed with 'No' (or left open) the value was saved at the exit and the Preferences did not open after a restart; the chosen colour is now stored with its alpha
 - fixed: each opening of the Preferences set the right to left selection transparency to the left to right one, and changed the right to left selection colours without a notice; the slider now shows the right to left alpha
 - fixed: closing the Preferences with the Preferences button of the status bar did not ask to save the edits and kept them in the form; a later Save of another value stored them too (for example a mistyped Cut Z); the button now closes the Preferences as the close button of the tab does, with the same question
+- fixed: an alpha of 1 to 15 on an alpha slider (Gerber, Excellon, CNC Job travel and selection colours) gave a 7-digit colour that the canvas rejects, so for example a CNC job was not drawn and no message was shown; also, Save or Apply put the old alpha back; the alpha has now always 2 digits and the slider also sets the colour fields that Save stores
 
 Tests:
 
@@ -70,6 +71,7 @@ Tests:
 - test_preferences_project_keys: the selection fill colour is stored with its alpha
 - test_preferences_project_keys: opening the Preferences keeps the right to left selection alpha
 - test_preferences_project_keys: closing the Preferences with the status bar button asks to save, and edits not saved are not shown again
+- test_preferences_project_keys: the alpha sliders give a valid colour that Save keeps
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
