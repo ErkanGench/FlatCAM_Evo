@@ -6356,29 +6356,40 @@ class FCExplode(FCShapeTool):
         lines = []
 
         for shape in self.draw_app.get_selected():
-            to_be_deleted_list.append(shape)
             geo = shape.geo
+            # the lines that replace this shape; a shape is removed only when it is replaced (an open path or a
+            # polygon was removed with nothing in its place, and a Multi* shape threw away the lines collected before)
+            shape_lines = []
 
             if geo.geom_type == 'MultiLineString':
-                lines = [line for line in geo.geoms]
+                shape_lines = [line for line in geo.geoms]
             elif geo.geom_type == 'MultiPolygon':
-                lines = []
                 for poly in geo.geoms:
-                    lines.append(poly.exterior)
-                    lines += list(poly.interiors)
-            elif geo.is_ring:
-                geo = Polygon(geo)
+                    shape_lines.append(poly.exterior)
+                    shape_lines += list(poly.interiors)
+            elif geo.is_ring or geo.geom_type == 'Polygon':
+                if geo.is_ring:
+                    geo = Polygon(geo)
                 ext_coords = list(geo.exterior.coords)
 
                 for c in range(len(ext_coords)):
                     if c < len(ext_coords) - 1:
-                        lines.append(LineString([ext_coords[c], ext_coords[c + 1]]))
+                        shape_lines.append(LineString([ext_coords[c], ext_coords[c + 1]]))
 
                 for int_geo in geo.interiors:
                     int_coords = list(int_geo.coords)
                     for c in range(len(int_coords)):
-                        if c < len(int_coords):
-                            lines.append(LineString([int_coords[c], int_coords[c + 1]]))
+                        if c < len(int_coords) - 1:
+                            shape_lines.append(LineString([int_coords[c], int_coords[c + 1]]))
+            elif geo.geom_type == 'LineString' and len(geo.coords) > 2:
+                # an open path (or an arc) is exploded in its segments; a single segment stays as it is
+                coords = list(geo.coords)
+                for c in range(len(coords) - 1):
+                    shape_lines.append(LineString([coords[c], coords[c + 1]]))
+
+            if shape_lines:
+                to_be_deleted_list.append(shape)
+                lines += shape_lines
 
         self.removed_shapes = to_be_deleted_list
 
