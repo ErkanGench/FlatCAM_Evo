@@ -60,12 +60,14 @@ Preprocessors:
 
 - fixed: with a laser power of 0 (the default) the Marlin laser preprocessors turned the laser on without a power: Marlin_laser_FAN_pin wrote a bare M106 (full output, 255), Marlin_laser_Spindle_pin and Marlin_laser_z a bare M3 / M4 (the startup power of Marlin); they now write an explicit S0, like the GRBL laser preprocessors; a set power does not change
 - fixed: Roland_MDX_20 and Roland_MDX_540 set the XY feedrate in the down code, over the Z feedrate set just before it, so a milling plunge ran at the XY feedrate (with 600 / 60 mm/min at 10 mm/s instead of 1 mm/s), which can break a V-bit; the plunge now uses the Z feedrate; the drilling G-code does not change
+- fixed: an error in a preprocessor method only dropped the G-code of that call (with one status bar warning) and the CNC job was still made, with missing lines; for example a Bed Skew with a Bed Size of 0 divided by zero in every position, so a laser job had no X-Y moves and fired at one spot and a drill job drilled all the holes at one place; the CNC job now fails with the preprocessor method and the error in the message (the solder paste job keeps its own error), and a Bed Skew with a Bed Size of 0 gives "Bed-skew correction needs a non-zero bed size."
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - new unit test for the zero power activation of the Marlin laser preprocessors (tests/test_laser_safety.py)
 - new unit test for the plunge feedrate of the Roland preprocessors (tests/test_preprocessors_no_swallowed_errors.py)
+- new unit test for the CNC job that fails on a preprocessor error (Bed Skew with a Bed Size of 0); the test jobs of tests/test_laser_safety.py and tests/test_cncjob_gcode_speed.py get the bounds and the tool diameter that the start code reads
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

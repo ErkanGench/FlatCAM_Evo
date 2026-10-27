@@ -35,7 +35,8 @@ def laser_warnings(app):
 
 def laser_job(app, obj_type='Geometry', **kwargs):
     job = CNCjob(app, **kwargs)
-    job.obj_options = {'name': 'job', 'type': obj_type}
+    # the bounds are read by the start code (the CNC job tools set them before the G-code is made)
+    job.obj_options = {'name': 'job', 'type': obj_type, 'xmin': 0, 'ymin': 0, 'xmax': 7, 'ymax': 0}
     job.coords_decimals = 4
     job.fr_decimals = 2
     return job
