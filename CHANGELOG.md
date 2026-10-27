@@ -43,6 +43,7 @@ Projects:
 - new: Import... in the project context menu (right-click on the project combobox) opens an Import dialog; the left side lists all the imports in groups (vector files, raster images, PCB boards) with a search box, the right side shows the file type, the created objects and a description; Import... runs the selected import with its own file dialog
 - new: Close All Projects in the project context menu, after a separator below Close Project; each project with unsaved changes asks first, a Cancel or a failed save stops the remaining closes, and 1 empty project stays at the end
 - new: Preferences -> General -> "Project Caching" (off by default); a switch hides the plot shapes of the inactive project instead of releasing them and keeps the plugin widgets, so a switch back does not plot again; a change of the object or the plot options plots the objects again, and closing a project or turning the option off releases the kept shapes
+- fixed: a new project made while an editor was open (the Tcl commands new and open_project) made new editors and left the old ones in memory, still connected to the menu and toolbar actions; later in the Geometry Editor, Union, Intersection and Subtract also ran in the old editor and showed "A selection of minimum two items is required."; the editors are now kept, as after a close by hand
 
 Proteus PCB import:
 
@@ -68,6 +69,7 @@ Tests:
 - new unit tests for the Project tab keys with the Plot Area closed (tests/test_app_history_keys.py)
 - new unit tests for Escape in the full screen mode (tests/test_app_history_keys.py)
 - new unit tests for Clear GUI Settings answered with No or Yes (tests/test_theme_color_scheme.py)
+- new unit test for New Project with an open editor (tests/test_projects_appio.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
