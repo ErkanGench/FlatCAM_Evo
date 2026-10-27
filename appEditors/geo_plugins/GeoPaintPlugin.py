@@ -174,6 +174,10 @@ class PaintOptionsTool(AppToolEditor):
             return
 
         tooldia = self.ui.painttooldia_entry.get_value()
+        # with a zero or negative diameter the passes do not move inwards and the Paint may never end
+        if not tooldia > 0:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The tool diameter must be a number greater than zero."))
+            return
         overlap = self.ui.paintoverlap_entry.get_value() / 100.0
         margin = self.ui.paintmargin_entry.get_value()
 

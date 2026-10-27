@@ -115,3 +115,19 @@ def test_buffer_follows_the_adaptive_circle_preference():
 
     assert counts[('adaptive', 0.05)] < counts[('adaptive', 5.0)]
     assert counts[('fixed', 0.05)] == counts[('fixed', 5.0)]
+
+
+def test_paint_refuses_a_tool_diameter_of_zero_or_less():
+    # a negative diameter made the Standard method grow its passes outwards forever; zero failed or painted the outline
+    for dia, accepted in ((0.0, False), (-0.5, False), (0.5, True)):
+        tool = SimpleNamespace(app=SimpleNamespace(inform=Mock()), paint=Mock(return_value=None),
+                               fcdraw=SimpleNamespace(selected=[line(0)], select_tool=Mock()))
+        tool.ui = SimpleNamespace(painttooldia_entry=radio(dia), paintoverlap_entry=radio(15.0),
+                                  paintmargin_entry=radio(0.0), paintmethod_combo=radio('Standard'),
+                                  paintcontour_cb=radio(True), pathconnect_cb=radio(False))
+
+        PaintOptionsTool.on_paint(tool)
+
+        assert tool.paint.called is accepted
+        if not accepted:
+            assert 'greater than zero' in tool.app.inform.emit.call_args.args[0]
