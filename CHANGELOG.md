@@ -59,11 +59,13 @@ Circle resolution:
 Exclusion areas:
 
 - fixed: with the 'Over' strategy the tool went over an area at its Over Z also when the Over Z was below the travel Z; with the defaults (Over Z 1.0, Travel Z 2.0) the drilling, milling and Tcl G-code moved the tool down from Z2 to Z1 to cross the area; the tool now stays at the travel Z when the Over Z is lower
+- fixed: with grid snap off, the first corner of a rectangular exclusion area was converted from screen to model coordinates twice, so the rubber band and the area started at a wrong point
 
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - tests/test_exclusion_area_travel.py: the Drilling and Milling travel over an exclusion area never goes below the travel Z
+- tests/test_exclusion_area_travel.py: the first corner of a rectangular exclusion area, with and without grid snap
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

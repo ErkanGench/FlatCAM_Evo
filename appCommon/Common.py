@@ -348,7 +348,8 @@ class ExclusionAreas(QtCore.QObject):
                     self.first_click = True
                     self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click the end point of the area."))
 
-                    self.cursor_pos = self.app.plotcanvas.translate_coords(event_pos)
+                    # event_pos is already in model coordinates (translated above)
+                    self.cursor_pos = (event_pos[0], event_pos[1])
                     if self.app.grid_status():
                         self.cursor_pos = self.app.geo_editor.snap(event_pos[0], event_pos[1])
                 else:

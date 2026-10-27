@@ -376,6 +376,54 @@ def test_drilling_job_ignores_a_milling_area_over_a_hole():
 
 
 # ---------------------------------------------------------------------------------------------------------------
+# Drawing the areas
+# ---------------------------------------------------------------------------------------------------------------
+
+def button(value):
+    return Mock(get_value=Mock(return_value=value))
+
+
+def drawing_app(shape='square', grid=False, active=None):
+    """An app that draws areas; its canvas converts a pixel (x, y) to the model point (x / 10 - 3, 40 - y / 10)."""
+    app = Mock()
+    app.app_units = 'MM'
+    app.call_source = 'app'
+    app.plotcanvas.translate_coords.side_effect = lambda pos: (pos[0] / 10.0 - 3.0, 40.0 - pos[1] / 10.0)
+    app.grid_status.return_value = grid
+    app.geo_editor.snap.side_effect = lambda x, y: (float(round(x)), float(round(y)))
+    app.collection.get_active.return_value = active
+    app.exc_areas = ExclusionAreas(app)
+    start_drawing(app, shape)
+    return app
+
+
+def start_drawing(app, shape='square'):
+    app.exc_areas.on_add_area_click(button(shape), button(5.0), button('over'), Mock(), [box(500, 500, 501, 501)],
+                                    'excellon', owner='drilling')
+
+
+def click(app, pos, which=1):
+    app.exc_areas.on_mouse_release(SimpleNamespace(pos=pos, button=which, is_dragging=False))
+
+
+def test_first_corner_of_a_rectangle_is_the_clicked_point():
+    # grid snap off: 1.0 converted the first click from pixels to model units twice
+    app = drawing_app()
+    click(app, (100, 50))
+    assert app.exc_areas.cursor_pos == pytest.approx((7.0, 35.0))       # 1.0: (-2.3, 36.5)
+    app.exc_areas.on_mouse_move(SimpleNamespace(pos=(200, 100), button=None, is_dragging=False))
+    assert app.draw_moving_selection_shape.call_args.kwargs['old_coords'] == pytest.approx((7.0, 35.0))
+    click(app, (300, 150))
+    assert app.exc_areas.exclusion_areas_storage[0]['shape'].bounds == pytest.approx((7.0, 25.0, 27.0, 35.0))
+
+    # grid snap on: the snapped points
+    app = drawing_app(grid=True)
+    click(app, (104, 53))
+    click(app, (296, 148))
+    assert app.exc_areas.exclusion_areas_storage[0]['shape'].bounds == (7.0, 25.0, 27.0, 35.0)
+
+
+# ---------------------------------------------------------------------------------------------------------------
 # OR-Tools route solver size limit
 # ---------------------------------------------------------------------------------------------------------------
 
