@@ -60,10 +60,15 @@ Cutout:
 
 - fixed: after "Search and Add" or "Pick from DB" the Gaps field and the Generate Geometry button disappeared and the manual buttons showed, while the radio still said Automatic
 
+2-Sided:
+
+- fixed: "Create Excellon Object" made alignment holes that the pins do not fit after the board is flipped (the Type of the holes differed from the Mirror axis) without a word; it now warns and names the Type to use
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - Cutout: a tool added from the search or from the Tools Database keeps the Automatic widgets and shows the widgets of its gap type
+- 2-Sided: a warning when the alignment holes do not fit the pins after the flip, none for a hole on the Mirror axis
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
