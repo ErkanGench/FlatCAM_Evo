@@ -1,9 +1,9 @@
-"""The Preferences form shows and saves the project keys of the active project."""
+"""The Preferences form shows and saves the project keys of the active project, and the values it keeps valid."""
 import os
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -83,6 +83,32 @@ class TestPreferencesProjectKeys(unittest.TestCase):
             manager.preferences_changed_flag = True
             manager.show_preferences_gui()
         self.assertEqual(manager.defaults_form_fields['gerber_bboxmargin'].value, 0.9)
+
+
+class TestPreferencesColors(unittest.TestCase):
+    def test_colours_without_a_readable_alpha_do_not_stop_the_preferences(self):
+        manager, defaults, _options = make_manager()
+        manager.ui = MagicMock(app=manager.ui.app)
+        defaults['gerber_plot_fill'] = '#FF0000'    # typed with 6 digits and saved
+        defaults['excellon_plot_fill'] = '#FF00'
+        defaults['global_sel_fill'] = 'bf'
+        manager._PreferencesUIManager__init_color_pickers()
+        ui = manager.ui
+        ui.gerber_pref_form.gerber_gen_group.gerber_alpha_entry.set_value.assert_called_once_with(255)
+        ui.excellon_pref_form.excellon_gen_group.excellon_alpha_entry.set_value.assert_called_once_with(0xBF)
+        ui.general_pref_form.general_gui_group.left_right_alpha_entry.set_value.assert_called_once_with(0xBF)
+
+    def test_save_keeps_the_alpha_of_a_colour(self):
+        manager, defaults, _options = make_manager()
+        defaults['gerber_plot_fill'] = '#BBF26880'
+        manager.defaults_form_fields = {
+            'gerber_plot_fill': Field('#FF0000'), 'excellon_plot_fill': Field('#FF00'),
+            'global_sel_line': Field('#00FF0040'), 'global_draw_color': Field('#FF0000')}
+        manager.defaults_read_form()
+        self.assertEqual(defaults['gerber_plot_fill'], '#FF000080')
+        self.assertEqual(defaults['excellon_plot_fill'], defaults.factory_defaults['excellon_plot_fill'])
+        self.assertEqual(defaults['global_sel_line'], '#00FF0040')
+        self.assertEqual(defaults['global_draw_color'], '#FF0000')
 
 
 if __name__ == '__main__':
