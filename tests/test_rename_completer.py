@@ -62,5 +62,41 @@ class TestRenameCompleter(unittest.TestCase):
         self.assertEqual(stub.obj_options["name"], "new")
 
 
+def named(name):
+    return SimpleNamespace(obj_options={"name": name})
+
+
+class TestRenameKeepsNamesUnique(unittest.TestCase):
+    def test_name_entry_and_gcode_export_number_the_name_of_another_object(self):
+        reg, _ = make_reg(["top", "top_cnc"])
+        stub = SimpleNamespace(
+            obj_options={"name": "top_cnc"},
+            default_data={"name": "top_cnc"},
+            ui=mock.MagicMock(),
+            app=SimpleNamespace(regFK=reg, ui=SimpleNamespace(code_editor=mock.MagicMock()),
+                                collection=mock.MagicMock(), inform=mock.MagicMock(), log=mock.MagicMock()),
+        )
+        stub.app.collection.get_list.return_value = [named("top"), stub]
+        # the G-code export renames the CNC job to the base name of the file (top.nc)
+        FlatCAMObj.on_name_activate(stub, silent=True, new_name="top")
+        self.assertEqual(stub.obj_options["name"], "top_1")
+        self.assertEqual(reg.myKeywords, ["top_1", "top"])
+        FlatCAMObj.on_name_activate(stub, new_name="")
+        self.assertEqual(stub.obj_options["name"], "top_1")
+
+    def test_project_tree_and_rename_object_number_the_name_of_another_object(self):
+        from appObjects.ObjectCollection import ObjectCollection
+        other, renamed = named("top"), named("top_cnc")
+        collection = SimpleNamespace(app=mock.MagicMock(), get_list=lambda: [other, renamed],
+                                     dataChanged=mock.MagicMock(), update_view=mock.MagicMock())
+        index = mock.MagicMock()
+        index.internalPointer.return_value.obj = renamed
+        ObjectCollection.setData(collection, index, "top")
+        self.assertEqual(renamed.obj_options["name"], "top_1")
+        renamed.obj_options["name"] = "top_cnc"
+        self.assertEqual(ObjectCollection.rename_object(collection, renamed, "top"), "top_1")
+        self.assertEqual((other.obj_options["name"], renamed.obj_options["name"]), ("top", "top_1"))
+
+
 if __name__ == "__main__":
     unittest.main()
