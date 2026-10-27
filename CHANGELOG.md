@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+Tcl:
+
+- fixed: a Tcl command that made an object with a name already in use (a script run again in the same session) gave the new object another name (name_1) without a message, and the next commands that use the name took the old object, so write_gcode could write the G-code of the first run; the command now warns and gives the name of the new object
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- new unit test for the warning of a Tcl command whose new object was renamed because its name was in use (tests/test_tcl_audit_regressions.py)
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
