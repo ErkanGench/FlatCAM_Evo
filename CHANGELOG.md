@@ -62,12 +62,17 @@ Geometry editor:
 - fixed: Paint did not start with the method set in Preferences (Standard gave Seed, Seed and Lines gave Standard); the preference is an index and is now used as one
 - fixed: loading a Geometry into the editor switched the grid snap on and set the tool diameter from the worker thread, and Union, Intersection, Subtract and Cut Path with less than two shapes selected went back to the Select tool from there; these widget changes are now made in the GUI thread (Qt widgets are not thread safe: rare random crashes)
 
+Editors:
+
+- fixed: in the Geometry, Gerber and Excellon editors '-' zoomed in and '=' zoomed out, the opposite of the main canvas and of the View menu; they now zoom out and in as everywhere else
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
 - test_geo_editor_performance: the editor's Paint refuses a tool diameter of zero or below
 - test_geo_editor_performance: the editor's Paint starts with the method of the Paint preference
 - test_geo_editor_history: the editor load and the boolean operations change the widgets in the GUI thread, not in the worker
+- test_app_history_keys: '-' zooms out and '=' zooms in, in the editors as on the main canvas
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

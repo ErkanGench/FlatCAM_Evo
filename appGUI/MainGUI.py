@@ -3956,12 +3956,12 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 # Zoom Out
                 if key == QtCore.Qt.Key.Key_Minus or key == '-':
-                    self.app.plotcanvas.zoom(1 / _database_option(self.app, 'global_zoom_ratio'),
+                    self.app.plotcanvas.zoom(_database_option(self.app, 'global_zoom_ratio'),
                                              [self.app.geo_editor.snap_x, self.app.geo_editor.snap_y])
 
                 # Zoom In
                 if key == QtCore.Qt.Key.Key_Equal or key == '=':
-                    self.app.plotcanvas.zoom(_database_option(self.app, 'global_zoom_ratio'),
+                    self.app.plotcanvas.zoom(1 / _database_option(self.app, 'global_zoom_ratio'),
                                              [self.app.geo_editor.snap_x, self.app.geo_editor.snap_y])
 
                 # # Switch to Project Tab
@@ -4204,13 +4204,13 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 if key == QtCore.Qt.Key.Key_Minus or key == '-':
                     self.app.grb_editor.launched_from_shortcuts = True
-                    self.app.plotcanvas.zoom(1 / _database_option(self.app, 'global_zoom_ratio'),
+                    self.app.plotcanvas.zoom(_database_option(self.app, 'global_zoom_ratio'),
                                              [self.app.grb_editor.snap_x, self.app.grb_editor.snap_y])
                     return
 
                 if key == QtCore.Qt.Key.Key_Equal or key == '=':
                     self.app.grb_editor.launched_from_shortcuts = True
-                    self.app.plotcanvas.zoom(_database_option(self.app, 'global_zoom_ratio'),
+                    self.app.plotcanvas.zoom(1 / _database_option(self.app, 'global_zoom_ratio'),
                                              [self.app.grb_editor.snap_x, self.app.grb_editor.snap_y])
                     return
 
@@ -4473,13 +4473,13 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 if key == QtCore.Qt.Key.Key_Minus or key == '-':
                     self.app.exc_editor.launched_from_shortcuts = True
-                    self.app.plotcanvas.zoom(1 / _database_option(self.app, 'global_zoom_ratio'),
+                    self.app.plotcanvas.zoom(_database_option(self.app, 'global_zoom_ratio'),
                                              [self.app.exc_editor.snap_x, self.app.exc_editor.snap_y])
                     return
 
                 if key == QtCore.Qt.Key.Key_Equal or key == '=':
                     self.app.exc_editor.launched_from_shortcuts = True
-                    self.app.plotcanvas.zoom(_database_option(self.app, 'global_zoom_ratio'),
+                    self.app.plotcanvas.zoom(1 / _database_option(self.app, 'global_zoom_ratio'),
                                              [self.app.exc_editor.snap_x, self.app.exc_editor.snap_y])
                     return
 
