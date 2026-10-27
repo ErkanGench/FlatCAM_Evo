@@ -72,6 +72,10 @@ Film:
 
 - fixed: a positive film punched at the pad centers failed with "Punch hole size is bigger than some of the apertures" for any Gerber with macro (AM) pads, such as the KiCad rounded rectangles, and for an aperture used only for tracks that is thinner than the punch; only the flashed pads are checked now, a macro or polygon pad by the width of the pad at its center
 
+Drilling and Milling:
+
+- fixed: the preprocessor list offered the solder paste preprocessors (Paste_GRBL, Paste_Marlin; in Milling also Paste_1) and Generate then failed with an AttributeError; they are left out, as in the Preferences lists
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
@@ -79,6 +83,7 @@ Tests:
 - 2-Sided: a warning when the alignment holes do not fit the pins after the flip, none for a hole on the Mirror axis
 - Align Objects: the source of an aligned Gerber and Excellon object parses back to the aligned geometry
 - Film: pad-center punching of a macro pad next to a thin track aperture, and a punch as wide as a pad
+- Drilling and Milling: no solder paste preprocessor in the preprocessor lists of the plugins
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0
