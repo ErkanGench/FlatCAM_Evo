@@ -18,7 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PyQt6 import QtWidgets  # noqa: E402
+from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
 from shapely import box  # noqa: E402
 
 from appMain import App  # noqa: E402
@@ -183,3 +183,37 @@ def test_isolation_runs_after_the_check_even_if_tasks_are_reordered(qapp):
     # a 5 mm tool does not fit between the copper features: the object is not selected
     assert any(m.startswith('[WARNING]') for m in messages(t))
     assert app.app_obj.new_object.call_args.kwargs['autoselected'] is False
+
+
+def standalone_optimal(tools):
+    # the Find Optimal plugin with the job run in place of the worker thread
+    app = make_tool_app()
+    app.dec_format = functools.partial(App.dec_format, app)
+    app.worker_task.emit.side_effect = lambda task: task['fcn'](*task['params'])
+    t = ToolOptimal(app)
+    t.ui.precision_spinner.set_value(DEC)
+    app.collection = MagicMock()
+    obj = app.collection.index.return_value.internalPointer.return_value.obj
+    obj.kind = 'gerber'
+    obj.tools = tools
+    return t
+
+
+def click_line(text_box, move):
+    with QtCore.QSignalBlocker(text_box):
+        text_box.moveCursor(move)
+
+
+def test_standalone_optimal_click_on_the_empty_last_line_of_the_distances(qapp):
+    t = standalone_optimal(gerber_tools(0.2))
+    t.find_minimum_distance()
+    distances = t.ui.distances_textb
+    assert distances.toPlainText().endswith('\n')
+    click_line(distances, QtGui.QTextCursor.MoveOperation.Start)
+    t.on_distances_textb_clicked()
+    shown = t.ui.locations_sec_textb.toPlainText()
+    assert shown.count('\n') == 1
+    # the empty line after the last distance raised ValueError: the 'Critical Error' dialog
+    click_line(distances, QtGui.QTextCursor.MoveOperation.End)
+    t.on_distances_textb_clicked()
+    assert t.ui.locations_sec_textb.toPlainText() == shown

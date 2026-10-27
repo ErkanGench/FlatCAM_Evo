@@ -337,7 +337,13 @@ class ToolOptimal(AppTool):
 
     def on_distances_textb_clicked(self):
         distance_text = self.ui.highlight_current_line(self.ui.distances_textb)
-        key_in_min_dict = safe_eval(distance_text)
+        # the empty line after the last distance (or an empty box) is no distance
+        try:
+            key_in_min_dict = safe_eval(distance_text)
+        except ValueError:
+            return
+        if key_in_min_dict not in self.min_dict:
+            return
         self.on_update_locations_text(dist=key_in_min_dict)
 
     def on_update_locations_text(self, dist):
