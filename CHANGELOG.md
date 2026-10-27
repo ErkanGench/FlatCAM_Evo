@@ -56,9 +56,14 @@ Circle resolution:
 - the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
 - the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
 
+DXF, SVG and HPGL2 Import:
+
+- fixed: with a list of diameters in the Milling "Tools Dia" preference (for example "0.3, 1.0", as its tooltip asks) the SVG, DXF and HPGL2 import as Geometry failed with "could not convert string to float" and made no object; the tool of the new Geometry now gets the first diameter of the list, as the other Geometry objects do
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+- tests/test_svg_import.py, tests/test_dxf_import.py, tests/test_gerber_parser.py: the SVG, DXF and HPGL2 import as Geometry with a list of diameters in the "Tools Dia" preference
 
 25.10.2026
 RELEASE FlatCAM Evo 1.0

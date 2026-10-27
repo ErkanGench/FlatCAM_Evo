@@ -1389,7 +1389,7 @@ class Geometry(object):
         # flatten the self.solid_geometry list for import_svg() to import SVG as Gerber
         self.solid_geometry = list(self.flatten_list(self.solid_geometry))
 
-        tooldia = float(self._app_option("tools_mill_tooldia"))
+        tooldia = first_tool_dia(self._app_option("tools_mill_tooldia"))
         tooldia = float('%.*f' % (self.decimals, tooldia))
 
         new_data = {k: v for k, v in self.obj_options.items()}
@@ -1463,7 +1463,7 @@ class Geometry(object):
         else:  # It's shapely geometry
             self.solid_geometry = [self.solid_geometry, geos]
 
-        tooldia = float(self._app_option("tools_mill_tooldia"))
+        tooldia = first_tool_dia(self._app_option("tools_mill_tooldia"))
         tooldia = float('%.*f' % (self.decimals, tooldia))
 
         new_data = {k: v for k, v in self.obj_options.items()}
@@ -9351,6 +9351,19 @@ def app_option(app, key, fallback=None):
 
     factory_defaults = getattr(defaults, "factory_defaults", {})
     return app.options.get(key, defaults.get(key, factory_defaults.get(key, fallback)))
+
+
+def first_tool_dia(value):
+    """
+    The first diameter of the "Tools Dia" preference (tools_mill_tooldia). The preference is a number or a text with
+    the diameters separated by comma ("0.3, 1.0"), as its tooltip asks; float() of such a text fails.
+
+    :param value:   the value of the preference
+    :return:        the first diameter, as a float (ValueError when the text does not start with a value)
+    """
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float(safe_eval(str(value).split(',')[0]))
 
 
 def circle_quad_segs(steps_per_circle) -> int:

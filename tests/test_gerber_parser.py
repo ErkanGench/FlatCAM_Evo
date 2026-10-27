@@ -607,6 +607,18 @@ def test_aperture_macro_rotation_variables_and_circle_steps():
     assert unrotated.bounds == pytest.approx((-0.6, -0.6, 0.6, 0.6), abs=1e-9)
 
 
+def test_read_hpgl2_with_several_tool_diameters():
+    # the Milling "Tools Dia" preference is a list of diameters ("0.3, 1.0"); float() of it failed the import
+    from appParsers.ParseHPGL2 import HPGL2
+    for value, dia in (('0.3, 1.0', 0.3), (2.4, 2.4)):
+        app = MockApp()
+        app.options['tools_mill_tooldia'] = value
+        hpgl = HPGL2(app)
+        hpgl.parse_lines(['IN;', 'SP1;', 'PU;', 'PA0,0;', 'PD;', 'PA4000,0;', 'PU;', 'PA0,0;'])
+        assert hpgl.tools['1']['tooldia'] == dia
+        assert list(hpgl.solid_geometry.coords) == [(0, 0), (100, 0)]
+
+
 def test_load_real_gerber_files():
     """Test loading actual Gerber files from test_files directory."""
     test_dir = os.path.dirname(os.path.abspath(__file__))

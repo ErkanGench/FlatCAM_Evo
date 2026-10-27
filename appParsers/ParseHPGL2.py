@@ -6,7 +6,7 @@
 # MIT Licence                                                #
 # ############################################################
 
-from camlib import arc, three_point_circle, grace, object_circle_steps, circle_quad_segs
+from camlib import arc, three_point_circle, grace, object_circle_steps, circle_quad_segs, first_tool_dia
 
 import numpy as np
 import re
@@ -252,7 +252,7 @@ class HPGL2:
                                 'tooldia': float('%.*f' %
                                                  (
                                                      self.decimals,
-                                                     float(self._get_app_option('tools_mill_tooldia'))
+                                                     first_tool_dia(self._get_app_option('tools_mill_tooldia'))
                                                  )
                                                  ),
                                 'offset': 'Path',
