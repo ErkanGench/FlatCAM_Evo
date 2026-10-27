@@ -343,6 +343,10 @@ class RegisterFK(QtCore.QObject):
         # ####### Windows: registry; Linux: ~/.local/share (mime + desktop); macOS: ~/Applications app bundle  ########
         # ###########################################################################################################
         if self.options.get("first_run") is True:
+            # the registration reads the lists from the Preferences forms, which defaults_write_form() fills only
+            # later: empty, they registered nothing and unregistered every extension of the options
+            for key, (group, widget) in self.ASSOC_WIDGET.items():
+                getattr(getattr(self.ui.util_pref_form, group), widget).set_value(self.options.get('fa_%s' % key))
             self.on_register_files()
 
     def connect_signals(self):
@@ -926,9 +930,10 @@ class RegisterFK(QtCore.QObject):
             new_k = new_reg_path + '.%s' % ext
             self.set_reg('', root_pth=root_path, new_reg_path_par=new_k, value='FlatCAM')
 
-        # and unregister those that are no longer in the Preferences windows but are in the file
+        # and unregister those that are no longer in the Preferences windows but are in the file, only where they
+        # still point to FlatCAM (another program may have the extension now)
         for ext in self.options.get("fa_excellon").replace(' ', '').split(','):
-            if ext not in exc_list:
+            if ext not in exc_list and self.get_reg(root_path, new_reg_path + '.%s' % ext) == 'FlatCAM':
                 self.delete_reg(root_pth=root_path, reg_path=new_reg_path, key_to_del='.%s' % ext)
 
         # now write the updated extensions to the self.options
@@ -949,9 +954,10 @@ class RegisterFK(QtCore.QObject):
             new_k = new_reg_path + '.%s' % ext
             self.set_reg('', root_pth=root_path, new_reg_path_par=new_k, value='FlatCAM')
 
-        # and unregister those that are no longer in the Preferences windows but are in the file
+        # and unregister those that are no longer in the Preferences windows but are in the file, only where they
+        # still point to FlatCAM (another program may have the extension now)
         for ext in self.options.get("fa_gerber").replace(' ', '').split(','):
-            if ext not in grb_list:
+            if ext not in grb_list and self.get_reg(root_path, new_reg_path + '.%s' % ext) == 'FlatCAM':
                 self.delete_reg(root_pth=root_path, reg_path=new_reg_path, key_to_del='.%s' % ext)
 
         self.inform.emit('[success] %s' % _("Extensions registered."))  # noqa
@@ -967,9 +973,10 @@ class RegisterFK(QtCore.QObject):
             new_k = new_reg_path + '.%s' % ext
             self.set_reg('', root_pth=root_path, new_reg_path_par=new_k, value='FlatCAM')
 
-        # and unregister those that are no longer in the Preferences windows but are in the file
+        # and unregister those that are no longer in the Preferences windows but are in the file, only where they
+        # still point to FlatCAM (another program may have the extension now)
         for ext in self.options.get("fa_gcode").replace(' ', '').split(','):
-            if ext not in gco_list:
+            if ext not in gco_list and self.get_reg(root_path, new_reg_path + '.%s' % ext) == 'FlatCAM':
                 self.delete_reg(root_pth=root_path, reg_path=new_reg_path, key_to_del='.%s' % ext)
 
         self.inform.emit('[success] %s' % _("Extensions registered."))  # noqa
